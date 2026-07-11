@@ -1,0 +1,38 @@
+version: '3'
+
+# Runner for the runbaypty snippets. Each `snip:NN` task runs one self-contained
+# demo (isolated throwaway daemon, auto-cleaned). Run from the repo root:
+#
+#   task -d examples/snippets --list      # see the menu
+#   task -d examples/snippets snip:01     # run one
+#   task -d examples/snippets all         # run every automated snippet (01-10)
+#
+# Snippets 11-14 are guided (browser / two terminals / ssh); see README.md.
+
+vars:
+  # Repo root (two levels up from examples/snippets/), where ./bin/runbaypty lives.
+  ROOT: '{{.TASKFILE_DIR}}/../..'
+
+tasks:
+  default:
+    desc: List the snippets.
+    cmds:
+      - task -d "{{.TASKFILE_DIR}}" --list
+
+  snip:01: { desc: "Your reader can die; the session does not care",        dir: '{{.ROOT}}', cmds: ['bash examples/snippets/01-survive-a-crash.sh'] }
+  snip:02: { desc: "The dev server that outlives every rebuild",            dir: '{{.ROOT}}', cmds: ['bash examples/snippets/02-outlive-your-terminal.sh'] }
+  snip:03: { desc: "Many watchers, one session (type here, all see it)",    dir: '{{.ROOT}}', cmds: ['bash examples/snippets/03-two-windows-one-session.sh'] }
+  snip:04: { desc: "Replace the daemon binary without dropping a session",  dir: '{{.ROOT}}', cmds: ['bash examples/snippets/04-hot-swap-the-daemon.sh'] }
+  snip:05: { desc: "Is it done yet, answered without polling",              dir: '{{.ROOT}}', cmds: ['bash examples/snippets/05-ping-me-when-done.sh'] }
+  snip:06: { desc: "Block until a server is ready, then move on",           dir: '{{.ROOT}}', cmds: ['bash examples/snippets/06-wait-for-ready.sh'] }
+  snip:07: { desc: "Per-command exit codes and output (OSC 133 blocks)",    dir: '{{.ROOT}}', cmds: ['bash examples/snippets/07-per-command-blocks.sh'] }
+  snip:08: { desc: "The agent/human handoff (steal the keyboard)",          dir: '{{.ROOT}}', cmds: ['bash examples/snippets/08-agent-hands-you-the-keyboard.sh'] }
+  snip:09: { desc: "Record a session and replay it with real timing",       dir: '{{.ROOT}}', cmds: ['bash examples/snippets/09-record-and-replay.sh'] }
+  snip:10: { desc: "Reprint a session's complete history",                  dir: '{{.ROOT}}', cmds: ['bash examples/snippets/10-reprint-full-history.sh'] }
+
+  all:
+    desc: Run every automated snippet (01-10) in sequence.
+    dir: '{{.ROOT}}'
+    cmds:
+      - for: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10']
+        cmd: 'echo "=== snippet {{.ITEM}} ===" && bash examples/snippets/{{.ITEM}}-*.sh'
