@@ -1,0 +1,161 @@
+<!doctype html>
+<!-- runbaypty WS smoke page (task-m5-smoke): a dev tool proving the
+     WebSocket transport end-to-end from a real browser. It implements the
+     wire protocol (PROTOCOL.md) in ~100 lines of JS: HELLO with token,
+     SPAWN, ATTACH, INPUT, RESIZE, OUTPUT/EXIT handling.
+
+     Usage:  runbaypty serve --ws-port 8377
+             open web/smoke.html, paste the port + token (token file path
+             is in `runbaypty daemon status`), Connect.
+
+     xterm.js loads from CDN; if that fails a <pre> fallback still proves
+     the byte stream. This page is a DEV TOOL — the ?port=&token= query
+     params exist for automation and leak into browser history; don't use
+     them with a token you care about. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>runbaypty — WS smoke</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  body { margin:0; font:14px ui-monospace,monospace; background:#111; color:#ddd; }
+  #bar { display:flex; gap:8px; padding:10px; background:#1c1c1c; align-items:center; flex-wrap:wrap; }
+  #bar input { background:#111; color:#ddd; border:1px solid #444; padding:6px 8px; font:inherit; }
+  #port { width:70px } #token { width:340px } #cmd { width:160px }
+  #bar button { background:#2d6cdf; color:#fff; border:0; padding:6px 14px; font:inherit; cursor:pointer; }
+  #status { margin-left:auto; color:#888; }
+  #status.ok { color:#5c5 } #status.err { color:#e66 }
+  #term { padding:8px; height:calc(100vh - 60px); box-sizing:border-box; }
+  #fallback { white-space:pre-wrap; padding:12px; display:none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <input id="port"  placeholder="port"  value="">
+  <input id="token" placeholder="control token (hex)" value="">
+  <input id="cmd"   placeholder="command" value="/bin/sh">
+  <button id="go">Connect</button>
+  <span id="status">disconnected</span>
+</div>
+<div id="term"></div>
+<pre id="fallback"></pre>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+// ── frame codec (PROTOCOL.md: [u32 len][u8 type][u16 headerLen][JSON][payload]) ──
+const T = { HELLO:1, HELLO_ACK:2, ERROR:3, SPAWN:10, SPAWN_OK:11, INPUT:12,
+            OUTPUT:14, RESIZE:15, KILL:16, ATTACH:21, ATTACH_OK:22, EXIT:31 };
+const utf8 = { enc:new TextEncoder(), dec:new TextDecoder() };
+
+function encodeFrame(type, header, payload) {
+  const h = utf8.enc.encode(JSON.stringify(header));
+  const p = payload || new Uint8Array(0);
+  const buf = new ArrayBuffer(4 + 3 + h.length + p.length);
+  const dv = new DataView(buf);
+  dv.setUint32(0, 3 + h.length + p.length);
+  dv.setUint8(4, type);
+  dv.setUint16(5, h.length);
+  new Uint8Array(buf, 7, h.length).set(h);
+  new Uint8Array(buf, 7 + h.length, p.length).set(p);
+  return buf;
+}
+
+function decodeFrame(buf) {
+  const dv = new DataView(buf);
+  const type = dv.getUint8(4);
+  const hlen = dv.getUint16(5);
+  const header = JSON.parse(utf8.dec.decode(new Uint8Array(buf, 7, hlen)));
+  const payload = new Uint8Array(buf, 7 + hlen);
+  return { type, header, payload };
+}
+
+// ── terminal (xterm.js with <pre> fallback) ──
+let term = null, fit = null;
+const fallbackEl = document.getElementById('fallback');
+function makeTerminal() {
+  if (window.Terminal) {
+    term = new Terminal({ fontFamily: 'ui-monospace, monospace', theme: { background: '#111' } });
+    fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById('term'));
+    fit.fit();
+    return true;
+  }
+  document.getElementById('term').style.display = 'none';
+  fallbackEl.style.display = 'block';
+  return false;
+}
+function writeOut(bytes) {
+  if (term) term.write(bytes);
+  else fallbackEl.textContent += utf8.dec.decode(bytes);
+}
+
+// ── protocol client ──
+const statusEl = document.getElementById('status');
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ''; }
+
+let ws = null, sessionId = null, reqSeq = 0, lastSeq = 0;
+const rid = () => 'web' + (++reqSeq);
+
+function connect() {
+  const port = document.getElementById('port').value.trim();
+  const token = document.getElementById('token').value.trim();
+  const cmd = document.getElementById('cmd').value.trim() || '/bin/sh';
+  if (!port || !token) { setStatus('port + token required', 'err'); return; }
+
+  makeTerminal();
+  ws = new WebSocket(`ws://127.0.0.1:${port}/v1`);
+  ws.binaryType = 'arraybuffer';
+  setStatus('connecting…');
+
+  ws.onopen = () => ws.send(encodeFrame(T.HELLO, { req_id: rid(), protocol_version: 1, token, client_name: 'smoke-page' }));
+  ws.onclose = () => setStatus('disconnected', 'err');
+  ws.onerror = () => setStatus('socket error — daemon running with --ws-port?', 'err');
+
+  ws.onmessage = (ev) => {
+    const f = decodeFrame(ev.data);
+    switch (f.type) {
+      case T.HELLO_ACK: {
+        setStatus(`hello: daemon ${f.header.daemon_version} · ${f.header.client_id}`, 'ok');
+        const size = term ? { cols: term.cols, rows: term.rows } : { cols: 80, rows: 24 };
+        ws.send(encodeFrame(T.SPAWN, { req_id: rid(), cmd, cols: size.cols, rows: size.rows, name: 'ws-smoke' }));
+        break;
+      }
+      case T.SPAWN_OK:
+        sessionId = f.header.session_id;
+        setStatus(`session ${sessionId} · pid ${f.header.pid}`, 'ok');
+        ws.send(encodeFrame(T.ATTACH, { req_id: rid(), session_id: sessionId }));
+        break;
+      case T.ATTACH_OK:
+        if (term) {
+          term.onData(d => ws.send(encodeFrame(T.INPUT, { session_id: sessionId }, utf8.enc.encode(d))));
+          term.onResize(({cols, rows}) => ws.send(encodeFrame(T.RESIZE, { req_id: rid(), session_id: sessionId, cols, rows })));
+          window.addEventListener('resize', () => fit && fit.fit());
+          term.focus();
+        }
+        break;
+      case T.OUTPUT:
+        // Seq audit in the browser too: any gap is a protocol bug.
+        if (lastSeq && f.header.seq !== lastSeq) console.warn('SEQ GAP', lastSeq, '→', f.header.seq);
+        lastSeq = f.header.seq + f.payload.length;
+        writeOut(f.payload);
+        break;
+      case T.EXIT:
+        setStatus(`session exited: code ${f.header.exit_code}${f.header.signal ? ' signal ' + f.header.signal : ''}`, 'err');
+        break;
+      case T.ERROR:
+        setStatus(`${f.header.code}: ${f.header.message}`, 'err');
+        break;
+    }
+  };
+}
+
+document.getElementById('go').onclick = connect;
+// Automation convenience (dev only — see header warning).
+const q = new URLSearchParams(location.search);
+if (q.get('port'))  document.getElementById('port').value  = q.get('port');
+if (q.get('token')) document.getElementById('token').value = q.get('token');
+if (q.get('autoconnect') === '1') connect();
+</script>
+</body>
+</html>

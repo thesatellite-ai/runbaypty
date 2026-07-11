@@ -1,0 +1,44 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - ineffassign
+    - misspell
+    - gosec
+  settings:
+    errcheck:
+      # Deliberate best-effort calls are written as `_ = f()` — visible in
+      # review; the linter enforces that nothing is ignored silently.
+      check-blank: false
+      exclude-functions:
+        # CLI output to the user's terminal: a failed Fprint has no
+        # actionable recovery and the conventional Go CLI idiom ignores it.
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    gosec:
+      excludes:
+        - G104 # duplicate of errcheck
+        - G204 # exec with variable args: the CLI's whole job (supervisor calls)
+        - G115 # int conversions: ring sizes/fds/frame lens are bounds-checked at their call sites
+        - G304 # file paths from flags/config: user-supplied paths ARE the product surface (logs, casts)
+        - G703 # same taint class as G304 for the takeover reply path (same-UID UDS)
+        - G118 # ctx cancel funcs stored on structs (attachment.cancel) — called on detach/cleanup
+        - G101 # errcodes registry: token FILE PATH constants, never token values
+  exclusions:
+    rules:
+      # Tests + examples: defer x.Close() without error capture is the
+      # conventional pattern; production code still answers to errcheck.
+      - path: _test\.go
+        linters: [errcheck, gosec]
+      - path: ^examples/
+        linters: [errcheck]
+
+formatters:
+  enable:
+    - gofmt

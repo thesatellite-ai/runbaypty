@@ -1,0 +1,51 @@
+version: 2
+
+project_name: runbaypty
+
+# Pure Go (no CGO) => cross-compile every target from one Linux runner.
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: runbaypty
+    main: ./cmd/runbaypty
+    binary: runbaypty
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      # windows joins once the ConPTY path lands (task-dec-conpty)
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: runbaypty
+    formats: ["tar.gz"]
+    name_template: "runbaypty_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
+  prerelease: auto

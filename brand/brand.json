@@ -1,0 +1,43 @@
+{
+  "name": "runbaypty",
+  "tagline": "The persistent, programmable PTY daemon.",
+  "description": "OS-managed daemon that owns PTY sessions so they survive any client rebuild, crash, or quit — with sequence-numbered zero-gap replay, a documented binary protocol over Unix socket + WebSocket, a Go SDK, and zero-downtime daemon upgrades via fd handover.",
+  "repo": "thesatellite-ai/runbaypty",
+  "language": "go",
+  "kind": "daemon+cli",
+  "license": "Apache-2.0",
+  "author": "khanakia",
+  "homepage": "https://github.com/thesatellite-ai/runbaypty",
+  "topics": [
+    "pty",
+    "terminal",
+    "daemon",
+    "terminal-multiplexer",
+    "session-persistence",
+    "golang",
+    "websocket",
+    "xterm",
+    "ai-agents",
+    "tmux-alternative",
+    "conpty",
+    "sdk"
+  ],
+  "positioning": {
+    "audience": "developers building terminal-adjacent tools: AI-agent orchestrators, web IDEs, desktop apps, CI systems",
+    "alternatives": ["tmux", "GNU screen", "dtach/abduco", "shpool", "ttyd/gotty", "pilotty"],
+    "differentiators": [
+      "sequence-numbered zero-gap replay (provable, not hopeful)",
+      "zero-downtime daemon upgrades via SCM_RIGHTS fd handover — not even tmux survives its own upgrade",
+      "raw byte passthrough (no screen-grid re-emulation)",
+      "documented additive-only binary protocol + first-class Go SDK",
+      "agent-era primitives: silence/activity events, OSC 133 command tracking, server-side WATCH, write-lock handoff"
+    ]
+  },
+  "brand": {
+    "skipped": true,
+    "note": "branding phase deliberately skipped per user instruction 2026-07-10; re-run satl-brand-kit later if wanted"
+  },
+  "khanakia": {
+    "addToApps": false
+  }
+}

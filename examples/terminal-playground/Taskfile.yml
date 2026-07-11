@@ -1,0 +1,66 @@
+version: '3'
+
+# One-command runner for the terminal playground. It starts an ISOLATED daemon
+# (its own home, socket, and WS port — 8388/9098 so it never collides with a
+# daemon you're already running on the defaults), then serves the web UI and
+# opens it in your browser.
+#
+#   task play     # build + start daemon + open the playground
+#   task stop     # stop that daemon and clean its state
+#   task logs     # tail the daemon log
+#
+# Run it from this directory (examples/terminal-playground/) or with
+# `task -d examples/terminal-playground play` from the repo root.
+
+vars:
+  REPO: '{{.TASKFILE_DIR}}/../..'
+  HOME_DIR: /tmp/rpty-playground-home
+  SOCK: /tmp/rpty-playground.sock
+  WS_PORT: '8388'
+  ADDR: 127.0.0.1:9098
+
+tasks:
+  default:
+    desc: Alias for `play`.
+    cmds:
+      - task: play
+
+  build:
+    desc: Build the runbaypty daemon binary into the repo's bin/.
+    dir: '{{.REPO}}'
+    cmds:
+      - go build -o bin/runbaypty ./cmd/runbaypty
+
+  play:
+    desc: Build, start an isolated daemon, serve the playground, and open it in a browser.
+    deps: [build]
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - |
+        set -e
+        mkdir -p {{.HOME_DIR}}
+        # Start the daemon only if nothing is already listening on our WS port.
+        if ! nc -z 127.0.0.1 {{.WS_PORT}} 2>/dev/null; then
+          echo "→ starting isolated daemon (ws :{{.WS_PORT}}, home {{.HOME_DIR}})"
+          RUNBAYPTY_HOME={{.HOME_DIR}} RUNBAYPTY_SOCK={{.SOCK}} \
+            nohup {{.REPO}}/bin/runbaypty serve --ws-port {{.WS_PORT}} >{{.HOME_DIR}}/serve.log 2>&1 &
+          # Wait for the token file — it appears once the daemon has booted.
+          for i in $(seq 1 50); do [ -f {{.HOME_DIR}}/token ] && break; sleep 0.1; done
+        else
+          echo "→ daemon already listening on :{{.WS_PORT}} — reusing it"
+        fi
+        echo "→ opening http://{{.ADDR}}/  (ctrl-c to stop the web helper; the daemon keeps running)"
+        ( sleep 1; (open "http://{{.ADDR}}/" || xdg-open "http://{{.ADDR}}/") >/dev/null 2>&1 || true ) &
+        RUNBAYPTY_HOME={{.HOME_DIR}} go run . --addr {{.ADDR}} --ws-port {{.WS_PORT}}
+
+  stop:
+    desc: Stop the playground's isolated daemon and remove its state.
+    cmds:
+      - pkill -f 'runbaypty serve --ws-port {{.WS_PORT}}' 2>/dev/null || true
+      - rm -rf {{.HOME_DIR}} {{.SOCK}}
+      - echo "playground daemon stopped, state cleaned."
+
+  logs:
+    desc: Tail the playground daemon's log.
+    cmds:
+      - tail -f {{.HOME_DIR}}/serve.log

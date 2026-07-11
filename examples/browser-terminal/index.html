@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>runbaypty — browser terminal</title>
+<!-- xterm.js from a CDN. This page is served by a LOCAL Go helper, not published
+     as an artifact, so a CDN is fine — but it does need network the first time.
+     Vendor these two files locally if you want a fully offline page. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e2e; color: #cdd6f4; font-family: ui-monospace, monospace; }
+  header { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #313244; display: flex; gap: 12px; align-items: center; }
+  .pill { padding: 1px 8px; border-radius: 999px; font-size: 11px; }
+  .ok { background: #a6e3a1; color: #11111b; }
+  .ro { background: #f9e2af; color: #11111b; }
+  .down { background: #f38ba8; color: #11111b; }
+  #term { height: calc(100% - 38px); padding: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>runbaypty</strong>
+  <span id="status" class="pill down">connecting…</span>
+  <span id="scope" class="pill"></span>
+  <span id="sid" style="opacity:.6"></span>
+</header>
+<div id="term"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script>
+// The Go helper replaces this placeholder with the real config at serve time,
+// so the secret token stays server-side until the page is delivered to this
+// same-origin localhost page.
+const RPTY = /*__RPTY_CONFIG__*/ null;
+
+// ── Frame types (the wire enum; see pkg/proto/frame.go) ──────────────────────
+const Type = Object.freeze({
+  HELLO: 1, HELLO_ACK: 2, ERROR: 3,
+  INPUT: 12, OUTPUT: 14, RESIZE: 15,
+  ATTACH: 21, ATTACH_OK: 22, TAKE_WRITE: 26, EXIT: 31,
+});
+const PROTOCOL_VERSION = 1;
+
+// ── Framing — the same four-field frame as every other client ────────────────
+function encodeFrame(type, header, payload) {
+  const enc = new TextEncoder();
+  const h = enc.encode(JSON.stringify(header));
+  const p = payload || new Uint8Array(0);
+  const total = 1 + 2 + h.length + p.length;
+  const buf = new Uint8Array(4 + total);
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(0, total);          // length prefix (excludes itself)
+  dv.setUint8(4, type);
+  dv.setUint16(5, h.length);
+  buf.set(h, 7);
+  buf.set(p, 7 + h.length);
+  return buf;
+}
+function decodeFrame(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const total = dv.getUint32(0);
+  const type = dv.getUint8(4);
+  const headerLen = dv.getUint16(5);
+  const dec = new TextDecoder();
+  const header = JSON.parse(dec.decode(buf.subarray(7, 7 + headerLen)));
+  const payload = buf.subarray(7 + headerLen, 4 + total);
+  return { type, header, payload };
+}
+
+let reqSeq = 0;
+const nextReqID = () => 'b-' + (++reqSeq);
+
+// ── xterm.js terminal ────────────────────────────────────────────────────────
+const term = new Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#1e1e2e' } });
+term.open(document.getElementById('term'));
+
+const statusEl = document.getElementById('status');
+const scopeEl = document.getElementById('scope');
+document.getElementById('sid').textContent = RPTY.sessionId;
+scopeEl.textContent = RPTY.readOnly ? 'read-only' : 'read-write';
+scopeEl.className = 'pill ' + (RPTY.readOnly ? 'ro' : 'ok');
+
+// ── The WebSocket connection ─────────────────────────────────────────────────
+const ws = new WebSocket(RPTY.wsUrl);
+ws.binaryType = 'arraybuffer';
+const send = (type, header, payload) => ws.send(encodeFrame(type, header, payload));
+
+ws.onopen = () => {
+  // HELLO with the token the server injected. The token authenticates the WS
+  // connection; its scope (control vs read-only) decides whether we can type.
+  send(Type.HELLO, {
+    req_id: nextReqID(), protocol_version: PROTOCOL_VERSION,
+    token: RPTY.token, client_name: 'browser-terminal',
+  });
+};
+
+ws.onclose = () => { statusEl.textContent = 'disconnected'; statusEl.className = 'pill down'; };
+
+ws.onmessage = (ev) => {
+  const { type, header, payload } = decodeFrame(new Uint8Array(ev.data));
+  switch (type) {
+    case Type.HELLO_ACK:
+      // Attach to the session. read_only follows the token scope; a read-only
+      // token forces a read-only attach regardless of what we ask for.
+      send(Type.ATTACH, { req_id: nextReqID(), session_id: RPTY.sessionId, read_only: RPTY.readOnly });
+      break;
+
+    case Type.ATTACH_OK:
+      statusEl.textContent = 'live';
+      statusEl.className = 'pill ok';
+      // If we hold a control token, claim the write lock so keystrokes reach
+      // the PTY. A read-only page skips this and can never type.
+      if (!RPTY.readOnly) {
+        send(Type.TAKE_WRITE, { req_id: nextReqID(), session_id: RPTY.sessionId });
+        sendResize(); // tell the PTY our real dimensions
+      }
+      break;
+
+    case Type.OUTPUT:
+      // Raw PTY bytes — including every escape sequence the program emitted.
+      // xterm.js is the terminal emulator that interprets them, so colors,
+      // cursor moves, and full-screen apps render exactly as they would in a
+      // native terminal. The daemon never re-rendered a grid; it passed bytes.
+      term.write(payload);
+      break;
+
+    case Type.EXIT:
+      term.write(`\r\n\x1b[90m[session exited: code ${header.exit_code}]\x1b[0m\r\n`);
+      statusEl.textContent = 'exited';
+      statusEl.className = 'pill down';
+      break;
+
+    case Type.ERROR:
+      term.write(`\r\n\x1b[31m[daemon error ${header.code}: ${header.message}]\x1b[0m\r\n`);
+      break;
+  }
+};
+
+// Keystrokes → INPUT frames. onData gives the already-encoded terminal bytes
+// (control chars, arrow-key escape sequences, everything), which is exactly the
+// payload the PTY wants. Suppressed for a read-only page.
+term.onData((data) => {
+  if (RPTY.readOnly) return;
+  send(Type.INPUT, { session_id: RPTY.sessionId }, new TextEncoder().encode(data));
+});
+
+// Terminal size → RESIZE frames, so the remote PTY's window matches what the
+// user sees (line wrapping, full-screen app layout depend on it).
+function sendResize() {
+  send(Type.RESIZE, { req_id: nextReqID(), session_id: RPTY.sessionId, cols: term.cols, rows: term.rows });
+}
+window.addEventListener('resize', () => { if (!RPTY.readOnly) sendResize(); });
+</script>
+</body>
+</html>

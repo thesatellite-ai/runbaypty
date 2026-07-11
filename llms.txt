@@ -1,0 +1,18 @@
+# runbaypty
+
+> The persistent, programmable PTY daemon: an OS-managed Go daemon that owns terminal sessions so they survive client rebuilds, crashes, quits, and even daemon upgrades. Binary protocol over Unix socket + loopback WebSocket, sequence-numbered zero-gap replay, Go SDK, agent-oriented events (silence/activity, OSC 133 command tracking, server-side regex watch).
+
+Key facts: policy-free daemon (no DB/recipes/restarts/grids); raw byte passthrough (no screen re-emulation); additive-only wire protocol; Apache-2.0.
+
+## Docs
+
+- [README](https://github.com/thesatellite-ai/runbaypty/blob/main/README.md): overview, quick start, comparison, FAQ
+- [examples/](https://github.com/thesatellite-ai/runbaypty/tree/main/examples): 22 runnable examples (Go SDK + raw-protocol JS/Python), each with its own README
+- [Go SDK reference](https://pkg.go.dev/github.com/thesatellite-ai/runbaypty/pkg/client): the `pkg/client` API on pkg.go.dev
+
+The wire-protocol spec, the SCM_RIGHTS handover design, and the competitive landscape research are maintained internally and will be published as they stabilize.
+
+## Usage
+
+- CLI: `runbaypty serve` (daemon) · run/ls/attach/kill/tail/export/events/lastcmd · `daemon install` for launchd/systemd
+- Go SDK: `github.com/thesatellite-ai/runbaypty/pkg/client` — Spawn, Attach, Watch, Follow (auto-reconnect with zero-gap resume)

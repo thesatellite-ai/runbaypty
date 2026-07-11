@@ -1,0 +1,36 @@
+# OS noise
+.DS_Store
+Thumbs.db
+
+# editors / local state
+.vscode/
+*.idea
+.env*
+*.bak
+~*
+_*
+
+# build artifacts
+bin/
+dist/
+vendor/
+tmp/
+/runbaypty
+
+# runtime state (a daemon run from the repo dir)
+*.sock
+daemon.json
+daemon.lock
+
+# secrets
+.github/.secrets*
+*.pem
+*.key
+
+# claude local
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+# BEGIN repolink (managed — do not edit)
+/CLAUDE.md
+/docsi
+# END repolink

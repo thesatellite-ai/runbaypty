@@ -1,0 +1,89 @@
+# https://taskfile.dev — the only command runner for this repo.
+version: "3"
+
+vars:
+  BIN: bin/runbaypty
+  MAIN: ./cmd/runbaypty
+
+tasks:
+  build:
+    desc: build the runbaypty binary into bin/
+    cmds:
+      - go build -trimpath -ldflags='-s -w' -o {{.BIN}} {{.MAIN}}
+
+  run-daemon:
+    desc: run the daemon in the foreground (dev)
+    cmds:
+      - go run {{.MAIN}} serve --foreground
+
+  test:
+    desc: unit tests, race detector on (the default test invocation)
+    cmds:
+      - go test -race -count=1 ./...
+
+  test-short:
+    desc: fast tests without -race (inner-loop only; CI always races)
+    cmds:
+      - go test -count=1 ./...
+
+  cover:
+    desc: module-wide coverage (matches CI) — HTML at tmp/cover.html
+    cmds:
+      - mkdir -p tmp
+      # -coverpkg credits code driven by integration tests in other packages.
+      - go test -count=1 -coverpkg=./pkg/...,./cmd/... -coverprofile=tmp/cover.out ./pkg/... ./cmd/...
+      - go tool cover -html=tmp/cover.out -o tmp/cover.html
+      - go tool cover -func=tmp/cover.out | tail -1
+
+  cover:gaps:
+    desc: list every function below 100% coverage, worst first
+    cmds:
+      - task: cover
+      - go tool cover -func=tmp/cover.out | grep -vE '100.0%$' | sed 's|github.com/thesatellite-ai/runbaypty/||' | awk '{printf "%s %s %s\n",$3,$1,$2}' | sort -n
+
+  fuzz:
+    desc: 30s smoke run of every fuzz target (decoder, scanner)
+    cmds:
+      - |
+        set -e
+        for pkg in $(go list ./...); do
+          for target in $(go test -list 'Fuzz.*' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+            echo ">> fuzz $pkg $target"
+            go test -run '^$' -fuzz "^${target}$" -fuzztime 30s "$pkg"
+          done
+        done
+
+  bench:
+    desc: run benchmarks (firehose numbers land in BENCH.md)
+    cmds:
+      - go test -run '^$' -bench . -benchmem ./...
+
+  lint:
+    desc: gofmt (write) + go vet
+    cmds:
+      - gofmt -w $(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*')
+      - go vet ./...
+
+  lint-check:
+    desc: gofmt in check-only mode + go vet (what CI runs)
+    cmds:
+      - |
+        out=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*'))
+        if [ -n "$out" ]; then echo "gofmt needed on:"; echo "$out"; exit 1; fi
+      - go vet ./...
+
+  tidy:
+    desc: go mod tidy (CI fails if this changes go.mod/go.sum)
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: remove build artifacts and tmp
+    cmds:
+      - rm -rf bin dist tmp/cover.*
+
+  upgrade:
+    desc: bump all module deps + tidy
+    cmds:
+      - go get -u ./...
+      - go mod tidy

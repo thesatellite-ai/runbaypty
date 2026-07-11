@@ -1,0 +1,70 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # macOS runner matters: PTY + launchd behavior differs from Linux,
+        # and macOS is the v1 target platform.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...
+
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+      - name: coverage floor (module-wide ≥ 85%)
+        # -coverpkg measures the whole module from every suite, so an
+        # integration test in pkg/daemon credits the pkg/host code it drives.
+        # The residual <100% is documented in COVERAGE.md (OS-failure branches
+        # and main()); the floor guards against regressions, not perfection.
+        run: |
+          go test -count=1 -coverpkg=./pkg/...,./cmd/... -coverprofile=cover.out ./pkg/... ./cmd/...
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {sub(/%/, "", $3); print $3}')
+          echo "module coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { exit (t >= 85.0 ? 0 : 1) }' || {
+            echo "::error::coverage ${total}% is below the 85% module floor"
+            exit 1
+          }
+
+      - name: upload coverage to Codecov
+        # Linux leg only (one upload per commit). Public-repo tokenless upload
+        # works via OIDC; add a CODECOV_TOKEN secret if uploads get rate-limited.
+        # Never fail CI on an upload hiccup — coverage reporting is advisory.
+        if: runner.os == 'Linux'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./cover.out
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: fuzz smoke (10s per target)
+        # Linux runner only: fuzz output caching differs per OS and one
+        # sweep is enough for a smoke signal.
+        if: runner.os == 'Linux'
+        run: |
+          for pkg in ./pkg/proto ./pkg/host; do
+            for target in $(go test -list 'Fuzz.*' "$pkg" | grep '^Fuzz' || true); do
+              echo ">> fuzz $pkg $target"
+              go test -run '^$' -fuzz "^${target}\$" -fuzztime 10s "$pkg"
+            done
+          done

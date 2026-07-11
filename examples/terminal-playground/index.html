@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>runbaypty — terminal playground</title>
+<!-- xterm.js core + addons from a CDN. This page is served by a LOCAL Go helper
+     (not published as an artifact), so a CDN is fine; it needs network on first
+     load. Vendor these locally for an offline bench. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+<style>
+  :root {
+    --bg: #11111b; --panel: #181825; --panel2: #1e1e2e; --line: #313244;
+    --fg: #cdd6f4; --muted: #7f849c; --accent: #89b4fa; --ok: #a6e3a1;
+    --warn: #f9e2af; --err: #f38ba8; --ro: #fab387;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body { display: grid; grid-template-columns: 260px 1fr 320px; grid-template-rows: 1fr 26px;
+    grid-template-areas: "left center right" "status status status"; height: 100vh; }
+  .col { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); }
+  #left { grid-area: left; } #right { grid-area: right; border-right: none; border-left: 1px solid var(--line); }
+  #center { grid-area: center; display: flex; flex-direction: column; background: var(--panel2); min-width: 0; }
+  #statusbar { grid-area: status; background: var(--panel); border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; padding: 0 10px; font-size: 11px; color: var(--muted); }
+  h3 { margin: 0; padding: 8px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--muted); border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  .pad { padding: 8px 10px; }
+  button { background: #313244; color: var(--fg); border: 1px solid #45475a; border-radius: 5px;
+    padding: 4px 8px; font: inherit; cursor: pointer; }
+  button:hover { background: #45475a; } button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #11111b; border-color: var(--accent); }
+  button.danger { background: var(--err); color: #11111b; border-color: var(--err); }
+  input, select, textarea { background: #11111b; color: var(--fg); border: 1px solid #45475a;
+    border-radius: 5px; padding: 4px 6px; font: inherit; width: 100%; }
+  label { display: block; font-size: 11px; color: var(--muted); margin: 6px 0 2px; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row > * { flex: 1; }
+  .row.tight > * { flex: none; }
+  .pill { padding: 1px 7px; border-radius: 999px; font-size: 10px; white-space: nowrap; }
+  .pill.ok { background: var(--ok); color: #11111b; } .pill.warn { background: var(--warn); color: #11111b; }
+  .pill.err { background: var(--err); color: #11111b; } .pill.ro { background: var(--ro); color: #11111b; }
+  .pill.muted { background: #45475a; color: var(--fg); }
+  .sess { padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .sess:hover { background: var(--panel2); } .sess.active { background: #313244; border-left: 2px solid var(--accent); }
+  .sess .n { font-weight: 600; } .sess .m { font-size: 10px; color: var(--muted); }
+  #toolbar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line);
+    flex-wrap: wrap; }
+  #termwrap { flex: 1; min-height: 0; padding: 4px 6px; }
+  #term { height: 100%; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { border: none; border-radius: 0; background: transparent; color: var(--muted); flex: 1; padding: 6px; }
+  .tabs button.on { color: var(--fg); border-bottom: 2px solid var(--accent); }
+  .tabpane { display: none; } .tabpane.on { display: block; }
+  .kv { display: grid; grid-template-columns: 100px 1fr; gap: 2px 8px; padding: 8px 10px; font-size: 11px; }
+  .kv .k { color: var(--muted); } .kv .v { word-break: break-all; }
+  .log { padding: 6px 10px; font-size: 11px; }
+  .log .e { padding: 2px 0; border-bottom: 1px solid #26263a; }
+  .log .t { color: var(--muted); } .log .ty { color: var(--accent); }
+  .cmd { padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; }
+  .flash { animation: fl .18s ease-out; } @keyframes fl { from { background: #585b70; } to { background: transparent; } }
+  .hint { color: var(--muted); font-size: 10px; padding: 4px 10px; }
+  details > summary { cursor: pointer; padding: 6px 10px; color: var(--muted); font-size: 11px; }
+  code { background: #11111b; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+  <!-- LEFT: sessions + spawn form -->
+  <div id="left" class="col">
+    <h3>Sessions <span id="sessCount" class="pill muted">0</span></h3>
+    <div id="sessList"></div>
+    <details open>
+      <summary>+ New session</summary>
+      <div class="pad">
+        <label>command</label><input id="f_cmd" value="/bin/sh" />
+        <label>args (space-separated)</label><input id="f_args" value="-i" />
+        <label>name (optional)</label><input id="f_name" placeholder="unique name" />
+        <label>cwd (optional)</label><input id="f_cwd" placeholder="/tmp" />
+        <div class="row tight"><div><label>cols</label><input id="f_cols" value="100" style="width:70px" /></div>
+          <div><label>rows</label><input id="f_rows" value="30" style="width:70px" /></div></div>
+        <label>ring bytes (0=default)</label><input id="f_ring" value="0" />
+        <label>log path (optional)</label><input id="f_log" placeholder="/tmp/session.log" />
+        <label>env (KEY=VAL, one per line)</label><textarea id="f_env" rows="2" placeholder="TERM=xterm-256color"></textarea>
+        <label class="row tight" style="margin-top:8px"><input type="checkbox" id="f_osc133" style="width:auto" /> shell integration (OSC 133 command marks)</label>
+        <div class="row" style="margin-top:8px"><button class="primary" id="btnSpawn">Spawn</button></div>
+      </div>
+    </details>
+  </div>
+
+  <!-- CENTER: terminal -->
+  <div id="center">
+    <div id="toolbar">
+      <span id="curName" class="pill muted">no session</span>
+      <span id="connPill" class="pill err">disconnected</span>
+      <span id="scopePill" class="pill ok">control</span>
+      <span id="lockPill" class="pill muted">no lock</span>
+      <span id="dims" class="pill muted">—</span>
+      <span style="flex:1"></span>
+      <input id="searchBox" placeholder="find… (Enter)" style="width:150px" />
+      <button id="btnTakeWrite">Take write</button>
+      <button id="btnReleaseWrite">Release</button>
+      <label class="row tight" style="margin:0"><input type="checkbox" id="chkReadOnly" style="width:auto" /> read-only</label>
+      <button id="btnEOF" title="send stdin EOF">EOF</button>
+      <button id="btnClear">Clear</button>
+      <select id="killSig" style="width:80px"><option>TERM</option><option>KILL</option><option>INT</option><option>HUP</option></select>
+      <button class="danger" id="btnKill">Kill</button>
+      <button id="btnRename">Rename</button>
+    </div>
+    <div id="termwrap"><div id="term"></div></div>
+  </div>
+
+  <!-- RIGHT: info / events / watches / commands -->
+  <div id="right" class="col">
+    <div class="tabs">
+      <button data-tab="info" class="on">Info</button>
+      <button data-tab="events">Events</button>
+      <button data-tab="watch">Watch</button>
+      <button data-tab="cmds">Cmds</button>
+    </div>
+    <div id="tab-info" class="tabpane on"><div id="infoBody" class="kv"><div class="k">—</div><div class="v">attach a session</div></div></div>
+    <div id="tab-events" class="tabpane">
+      <div class="row tight" style="padding:6px 10px"><button id="btnClearEv">clear</button><span class="hint">all-session lifecycle stream</span></div>
+      <div id="evLog" class="log"></div>
+    </div>
+    <div id="tab-watch" class="tabpane">
+      <div class="pad"><label>regex (RE2) on current session</label>
+        <div class="row"><input id="watchPat" placeholder="ERROR|\\bwarn" /><button id="btnWatch" style="flex:none">Add</button></div></div>
+      <div id="watchList" class="log"></div>
+    </div>
+    <div id="tab-cmds" class="tabpane">
+      <div class="row tight" style="padding:6px 10px"><button id="btnReplay">Replay last cmd</button><span class="hint">OSC 133 blocks</span></div>
+      <div id="cmdList"></div>
+    </div>
+  </div>
+
+  <div id="statusbar">
+    <span id="stDaemon">daemon —</span>
+    <span id="stClient">client —</span>
+    <span id="stSeq">seq —</span>
+    <span id="stWs"></span>
+    <span style="flex:1"></span>
+    <span id="stMsg"></span>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
+<script>
+"use strict";
+// The Go helper injects real config (wsUrl, both tokens) here at serve time.
+const RPTY = /*__RPTY_CONFIG__*/ null;
+
+// ── Frame types — the full wire enum (pkg/proto/frame.go). Named, never bare. ──
+const T = Object.freeze({
+  HELLO:1, HELLO_ACK:2, ERROR:3,
+  SPAWN:10, SPAWN_OK:11, INPUT:12, INPUT_EOF:13, OUTPUT:14, RESIZE:15, KILL:16,
+  LIST:17, LIST_OK:18, INFO:19, INFO_OK:20, ATTACH:21, ATTACH_OK:22, DETACH:23,
+  RENAME:24, SET_META:25, TAKE_WRITE:26, RELEASE_WRITE:27, SUB_EVENTS:28, OK:29,
+  EVENT:30, EXIT:31, WATCH:42, WATCH_EVENT:43, REPLAY_COMMAND:44, REPLAY_COMMAND_OK:45, WATCH_OK:47,
+});
+const NAME = Object.fromEntries(Object.entries(T).map(([k,v]) => [v,k]));
+
+// ── Framing: [u32 len][u8 type][u16 headerLen][header JSON][payload]. len excludes itself. ──
+function encode(type, header, payload) {
+  const enc = new TextEncoder();
+  const h = enc.encode(JSON.stringify(header || {}));
+  const p = payload || new Uint8Array(0);
+  const total = 1 + 2 + h.length + p.length;
+  const buf = new Uint8Array(4 + total);
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(0, total); dv.setUint8(4, type); dv.setUint16(5, h.length);
+  buf.set(h, 7); buf.set(p, 7 + h.length);
+  return buf;
+}
+function decode(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const total = dv.getUint32(0), type = dv.getUint8(4), hlen = dv.getUint16(5);
+  const header = JSON.parse(new TextDecoder().decode(buf.subarray(7, 7 + hlen)));
+  return { type, header, payload: buf.subarray(7 + hlen, 4 + total) };
+}
+
+// ── xterm.js terminal + addons ────────────────────────────────────────────────
+const term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 10000,
+  theme: { background: "#1e1e2e", foreground: "#cdd6f4" }, allowProposedApi: true });
+const fit = new FitAddon.FitAddon();
+const search = new SearchAddon.SearchAddon();
+term.loadAddon(fit); term.loadAddon(search);
+term.loadAddon(new WebLinksAddon.WebLinksAddon());
+try { const u = new Unicode11Addon.Unicode11Addon(); term.loadAddon(u); term.unicode.activeVersion = "11"; } catch (e) {}
+term.open(document.getElementById("term"));
+
+// ── Client state ──────────────────────────────────────────────────────────────
+const S = {
+  ws: null, scope: "control", token: RPTY.controlToken,
+  attached: null,          // session id we're attached to
+  lastSeq: 0,              // for zero-gap resume on reconnect
+  holdingWrite: false, readOnlyAttach: false,
+  reqSeq: 0, pending: new Map(),   // req_id -> {resolve,reject}
+  watches: new Map(),      // watch_id -> pattern (re-registered on reconnect)
+  wantReconnect: true, backoff: 250,
+};
+const $ = (id) => document.getElementById(id);
+const setMsg = (m, cls) => { const e = $("stMsg"); e.textContent = m; e.style.color = cls || "var(--muted)"; };
+
+// ── Send / request-reply ──────────────────────────────────────────────────────
+function raw(type, header, payload) { if (S.ws && S.ws.readyState === 1) S.ws.send(encode(type, header, payload)); }
+// call() adds a req_id and returns a Promise settled by the matching reply.
+function call(type, header, payload) {
+  return new Promise((resolve, reject) => {
+    const req_id = "w-" + (++S.reqSeq);
+    S.pending.set(req_id, { resolve, reject });
+    setTimeout(() => { if (S.pending.delete(req_id)) reject(new Error(NAME[type] + " timed out")); }, 8000);
+    raw(type, Object.assign({ req_id }, header), payload);
+  });
+}
+
+// ── Connection lifecycle (with reconnect + zero-gap resume) ────────────────────
+function connect() {
+  setConn("connecting", "warn");
+  const ws = new WebSocket(RPTY.wsUrl); ws.binaryType = "arraybuffer"; S.ws = ws;
+  ws.onopen = async () => {
+    try {
+      const ack = await call(T.HELLO, { protocol_version: RPTY.protocolVersion, token: S.token, client_name: "terminal-playground" });
+      S.backoff = 250;
+      setConn("connected", "ok");
+      $("stDaemon").textContent = "daemon " + ack.daemon_version;
+      $("stClient").textContent = "client " + ack.client_id;
+      $("stWs").textContent = RPTY.wsUrl;
+      $("scopePill").textContent = S.scope; $("scopePill").className = "pill " + (S.scope === "control" ? "ok" : "ro");
+      await subscribeEvents();
+      await refreshSessions();
+      // Resume a prior attach at the exact seq (Follow behavior in the browser).
+      if (S.attached) await attach(S.attached, S.lastSeq, true);
+      // Re-register watches that survived the drop.
+      for (const [, pat] of S.watches) { try { await addWatch(pat, true); } catch (e) {} }
+    } catch (e) { setMsg("handshake failed: " + e.message, "var(--err)"); }
+  };
+  ws.onmessage = (ev) => onFrame(decode(new Uint8Array(ev.data)));
+  ws.onclose = () => {
+    setConn("disconnected", "err"); S.holdingWrite = false; renderLock();
+    for (const [, p] of S.pending) p.reject(new Error("connection closed")); S.pending.clear();
+    if (S.wantReconnect) { setMsg("reconnecting in " + S.backoff + "ms…", "var(--warn)");
+      setTimeout(connect, S.backoff); S.backoff = Math.min(S.backoff * 2, 5000); }
+  };
+  ws.onerror = () => {};
+}
+
+function onFrame({ type, header, payload }) {
+  // Replies carry the echoed req_id; settle the waiting call().
+  if (header.req_id && S.pending.has(header.req_id)) {
+    const p = S.pending.get(header.req_id); S.pending.delete(header.req_id);
+    if (type === T.ERROR) p.reject(new Error("[" + header.code + "] " + header.message));
+    else p.resolve(header);
+    return;
+  }
+  // Otherwise it's a server push.
+  switch (type) {
+    case T.OUTPUT:
+      if (header.session_id === S.attached) { term.write(payload); S.lastSeq = header.seq + payload.length; $("stSeq").textContent = "seq " + S.lastSeq; }
+      break;
+    case T.EVENT: onEvent(header); break;
+    case T.EXIT:
+      if (header.session_id === S.attached)
+        term.write("\r\n\x1b[90m[session exited: code " + header.exit_code + (header.signal ? " signal " + header.signal : "") + "]\x1b[0m\r\n");
+      refreshSessions(); if (header.session_id === S.attached) refreshInfo();
+      break;
+    case T.WATCH_EVENT: onWatchMatch(header); break;
+    case T.ERROR: setMsg("push error [" + header.code + "] " + header.message, "var(--err)"); break;
+  }
+}
+
+// ── Sessions: list + spawn + attach + kill + rename ────────────────────────────
+async function refreshSessions() {
+  try {
+    const r = await call(T.LIST, {});
+    const list = r.sessions || [];
+    $("sessCount").textContent = list.length;
+    const box = $("sessList"); box.innerHTML = "";
+    list.sort((a, b) => a.id < b.id ? -1 : 1);
+    for (const s of list) {
+      const div = document.createElement("div");
+      div.className = "sess" + (s.id === S.attached ? " active" : "");
+      const cmd = (s.cmd + " " + (s.args || []).join(" ")).slice(0, 40);
+      div.innerHTML = `<div class="n">${esc(s.name || "(unnamed)")} <span class="pill ${s.state==='running'?'ok':(s.state==='exited'?'muted':'warn')}">${s.state}</span></div>
+        <div class="m">${s.id.slice(0,20)}… · pid ${s.pid} · ${s.subscribers} client(s)</div><div class="m">${esc(cmd)}</div>`;
+      div.onclick = () => attach(s.id, null, false);
+      box.appendChild(div);
+    }
+  } catch (e) { setMsg("list failed: " + e.message, "var(--err)"); }
+}
+
+async function spawn() {
+  const args = $("f_args").value.trim() ? $("f_args").value.trim().split(/\s+/) : [];
+  const env = $("f_env").value.split("\n").map(s => s.trim()).filter(Boolean);
+  // OSC 133 shell integration: make the shell emit command marks so the Cmds
+  // panel and replay work. We prepend a PROMPT_COMMAND + PS1 wrapper via env.
+  if ($("f_osc133").checked) {
+    env.push("PROMPT_COMMAND=printf '\\033]133;D;%d\\007' $?; printf '\\033]133;A\\007'");
+    env.push("PS1=\\033]133;B\\007$ ");
+  }
+  const opts = {
+    cmd: $("f_cmd").value.trim(), args,
+    cols: parseInt($("f_cols").value) || 80, rows: parseInt($("f_rows").value) || 24,
+  };
+  if ($("f_name").value.trim()) opts.name = $("f_name").value.trim();
+  if ($("f_cwd").value.trim()) opts.cwd = $("f_cwd").value.trim();
+  if (parseInt($("f_ring").value)) opts.ring_bytes = parseInt($("f_ring").value);
+  if ($("f_log").value.trim()) opts.log_path = $("f_log").value.trim();
+  if (env.length) opts.env = env;
+  try {
+    const r = await call(T.SPAWN, opts);
+    setMsg("spawned " + r.session_id, "var(--ok)");
+    await refreshSessions();
+    await attach(r.session_id, null, false);
+  } catch (e) { setMsg("spawn failed: " + e.message, "var(--err)"); }
+}
+
+async function attach(id, sinceSeq, isResume) {
+  if (!isResume && S.attached && S.attached !== id) { try { await call(T.DETACH, { session_id: S.attached }); } catch (e) {} }
+  if (!isResume) { term.reset(); S.lastSeq = 0; S.holdingWrite = false; }
+  const h = { session_id: id, read_only: S.readOnlyAttach };
+  if (sinceSeq != null) h.since_seq = sinceSeq;
+  try {
+    const ok = await call(T.ATTACH, h);
+    S.attached = id;
+    $("curName").textContent = id.slice(0, 18) + "…"; $("curName").className = "pill ok";
+    renderLock(); refreshSessions(); refreshInfo();
+    doFit();
+    setMsg("attached (last_seq " + ok.last_seq + (ok.truncated ? ", truncated" : "") + ")", "var(--ok)");
+  } catch (e) { setMsg("attach failed: " + e.message, "var(--err)"); }
+}
+
+async function refreshInfo() {
+  if (!S.attached) return;
+  try {
+    const r = await call(T.INFO, { session_id: S.attached });
+    const s = r.session; const b = $("infoBody"); b.innerHTML = "";
+    const rows = [["id", s.id], ["name", s.name || "—"], ["state", s.state], ["pid", s.pid],
+      ["cmd", s.cmd + " " + (s.args || []).join(" ")], ["cwd", s.cwd || "—"], ["cols×rows", s.cols + "×" + s.rows],
+      ["last_seq", s.last_seq], ["bytes out", s.bytes_out], ["bytes in", s.bytes_in],
+      ["subscribers", s.subscribers], ["write lock", s.write_lock_holder || "(none)"],
+      ["exit code", s.exit_code != null ? s.exit_code : "—"], ["log", s.log_path || "—"],
+      ["fg", s.fg_pid ? (s.fg_comm + " (" + s.fg_pid + ")") : "—"], ["meta", JSON.stringify(s.meta || {})]];
+    for (const [k, v] of rows) b.insertAdjacentHTML("beforeend", `<div class="k">${k}</div><div class="v">${esc(String(v))}</div>`);
+  } catch (e) {}
+}
+
+// ── Write lock ─────────────────────────────────────────────────────────────────
+async function takeWrite() { try { await call(T.TAKE_WRITE, { session_id: S.attached }); S.holdingWrite = true; renderLock(); refreshInfo(); setMsg("write lock acquired", "var(--ok)"); } catch (e) { setMsg(e.message, "var(--err)"); } }
+async function releaseWrite() { try { await call(T.RELEASE_WRITE, { session_id: S.attached }); S.holdingWrite = false; renderLock(); refreshInfo(); } catch (e) { setMsg(e.message, "var(--err)"); } }
+function renderLock() {
+  const p = $("lockPill"); const canType = S.holdingWrite && !S.readOnlyAttach;
+  p.textContent = S.readOnlyAttach ? "read-only" : (S.holdingWrite ? "writing" : "no lock");
+  p.className = "pill " + (S.readOnlyAttach ? "ro" : (S.holdingWrite ? "ok" : "muted"));
+  $("btnTakeWrite").disabled = S.readOnlyAttach || !S.attached;
+  $("btnReleaseWrite").disabled = !S.holdingWrite;
+}
+
+// ── Events stream ──────────────────────────────────────────────────────────────
+async function subscribeEvents() { try { await call(T.SUB_EVENTS, { session_id: "" }); } catch (e) {} }
+function onEvent(ev) {
+  const row = document.createElement("div"); row.className = "e";
+  const data = ev.data ? " " + JSON.stringify(ev.data) : "";
+  row.innerHTML = `<span class="t">${ts(ev.at_ms)}</span> <span class="ty">${ev.type}</span> <span class="t">${(ev.session_id||'').slice(0,12)}</span>${esc(data)}`;
+  const log = $("evLog"); log.insertBefore(row, log.firstChild);
+  while (log.childElementCount > 200) log.removeChild(log.lastChild);
+  // React to events that change our view.
+  if (["created", "exited", "renamed", "attached", "detached"].includes(ev.type)) refreshSessions();
+  if (ev.session_id === S.attached && ["exited", "resized", "renamed", "meta-changed", "attached", "detached"].includes(ev.type)) refreshInfo();
+  if (ev.type === "bell" && ev.session_id === S.attached) bell();
+  if (ev.type === "command-started" || ev.type === "command-finished") onCommandEvent(ev);
+}
+
+// ── Watches ────────────────────────────────────────────────────────────────────
+async function addWatch(pattern, isResume) {
+  if (!S.attached) { setMsg("attach a session first", "var(--warn)"); return; }
+  const r = await call(T.WATCH, { session_id: S.attached, pattern });
+  S.watches.set(r.watch_id, pattern);
+  if (!isResume) { const box = $("watchList");
+    box.insertAdjacentHTML("afterbegin", `<div class="e"><span class="ty">watch</span> /${esc(pattern)}/ <span class="t">armed (${r.watch_id.slice(0,8)})</span></div>`); }
+}
+function onWatchMatch(h) {
+  const box = $("watchList"); const pat = S.watches.get(h.watch_id) || "?";
+  box.insertAdjacentHTML("afterbegin", `<div class="e"><span class="t">seq ${h.seq}</span> /${esc(pat)}/ → <b>${esc(h.match)}</b></div>`);
+}
+
+// ── OSC 133 command blocks + replay ────────────────────────────────────────────
+function onCommandEvent(ev) {
+  if (ev.type === "command-finished") {
+    const code = ev.data.exit_code, start = ev.data.start_seq, end = ev.data.end_seq;
+    const div = document.createElement("div"); div.className = "cmd";
+    div.innerHTML = `<span class="pill ${code==='0'?'ok':'err'}">exit ${code==null?'?':code}</span> bytes [${start}, ${end}) <span class="t">${ts(ev.at_ms)}</span>`;
+    const box = $("cmdList"); box.insertBefore(div, box.firstChild);
+  }
+}
+async function replayLast() {
+  if (!S.attached) return;
+  try {
+    const r = await call(T.REPLAY_COMMAND, { session_id: S.attached });
+    setMsg("replayed last cmd seq [" + r.start_seq + ", " + r.end_seq + ")" + (r.truncated ? " (truncated)" : ""), "var(--ok)");
+  } catch (e) { setMsg("replay: " + e.message, "var(--err)"); }
+}
+
+// ── Terminal input / resize / bell / search ────────────────────────────────────
+term.onData((d) => {
+  if (!S.attached) return;
+  if (S.readOnlyAttach || !S.holdingWrite) { setMsg("read-only — take the write lock to type", "var(--warn)"); return; }
+  raw(T.INPUT, { session_id: S.attached }, new TextEncoder().encode(d));
+});
+function doFit() {
+  try { fit.fit(); } catch (e) { return; }
+  $("dims").textContent = term.cols + "×" + term.rows;
+  if (S.attached && S.scope === "control") raw(T.RESIZE, { session_id: S.attached, cols: term.cols, rows: term.rows });
+}
+new ResizeObserver(() => doFit()).observe($("termwrap"));
+term.onBell(() => bell());
+let audioCtx = null;
+function bell() {
+  document.getElementById("term").classList.remove("flash"); void document.getElementById("term").offsetWidth;
+  document.getElementById("term").classList.add("flash");
+  try { audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = 880; g.gain.value = 0.05; o.start(); o.stop(audioCtx.currentTime + 0.08); } catch (e) {}
+}
+
+// ── Read-only scope toggle: reconnect with the read-only token ─────────────────
+async function toggleReadOnly(on) {
+  S.readOnlyAttach = on; S.scope = on ? "readonly" : "control"; S.token = on ? RPTY.readOnlyToken : RPTY.controlToken;
+  // A read-only credential enforces read-only at the daemon; reconnect so the
+  // whole connection is scoped, demonstrating the real security boundary.
+  S.wantReconnect = true; if (S.ws) S.ws.close();
+  renderLock();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c])); }
+function ts(ms) { const d = new Date(ms); return d.toLocaleTimeString(); }
+function setConn(text, cls) { const p = $("connPill"); p.textContent = text; p.className = "pill " + cls; }
+
+// ── Wire up the UI ──────────────────────────────────────────────────────────────
+$("btnSpawn").onclick = spawn;
+$("btnTakeWrite").onclick = takeWrite;
+$("btnReleaseWrite").onclick = releaseWrite;
+$("chkReadOnly").onchange = (e) => toggleReadOnly(e.target.checked);
+$("btnEOF").onclick = () => S.attached && call(T.INPUT_EOF, { session_id: S.attached }).catch(e => setMsg(e.message, "var(--err)"));
+$("btnClear").onclick = () => term.clear();
+$("btnKill").onclick = () => S.attached && call(T.KILL, { session_id: S.attached, signal: $("killSig").value }).then(() => setMsg("kill sent", "var(--warn)")).catch(e => setMsg(e.message, "var(--err)"));
+$("btnRename").onclick = () => { if (!S.attached) return; const n = prompt("new name:"); if (n) call(T.RENAME, { session_id: S.attached, name: n }).then(refreshSessions).catch(e => setMsg(e.message, "var(--err)")); };
+$("btnWatch").onclick = () => { const p = $("watchPat").value.trim(); if (p) addWatch(p, false).catch(e => setMsg(e.message, "var(--err)")); };
+$("btnReplay").onclick = replayLast;
+$("btnClearEv").onclick = () => $("evLog").innerHTML = "";
+$("searchBox").addEventListener("keydown", (e) => { if (e.key === "Enter") search.findNext($("searchBox").value); });
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("on"));
+  document.querySelectorAll(".tabpane").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); $("tab-" + b.dataset.tab).classList.add("on");
+});
+
+// Go.
+renderLock();
+connect();
+</script>
+</body>
+</html>

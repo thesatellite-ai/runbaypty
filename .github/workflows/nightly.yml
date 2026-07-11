@@ -1,0 +1,44 @@
+name: Nightly
+
+# Nightly depth: the 10-minute soak (flat goroutine/heap curves under
+# session churn) plus a longer fuzz sweep than the per-PR smoke.
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: macos-latest # PTY behavior on the primary target platform
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: soak (10m churn, flat-curve assertions)
+        env:
+          RUNBAYPTY_SOAK: 10m
+        run: go test -count=1 -timeout 25m -run TestSoak ./pkg/daemon/
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: fuzz sweep (5m per target)
+        run: |
+          for pkg in ./pkg/proto ./pkg/host; do
+            for target in $(go test -list 'Fuzz.*' "$pkg" | grep '^Fuzz' || true); do
+              echo ">> fuzz $pkg $target"
+              go test -run '^$' -fuzz "^${target}\$" -fuzztime 5m "$pkg"
+            done
+          done
