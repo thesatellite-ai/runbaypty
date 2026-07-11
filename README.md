@@ -26,6 +26,7 @@ A tiny OS-managed daemon owns your PTY sessions — dev servers, AI agents, buil
 - [Why runbaypty?](#why-runbaypty)
 - [Quick start](#quick-start)
 - [Try it in the browser](#try-it-in-the-browser)
+- [Commands](#commands)
 - [Highlights](#highlights)
 - [How it compares](#how-it-compares)
 - [FAQ](#faq)
@@ -66,6 +67,51 @@ task -d examples/terminal-playground play
 ```
 
 For the minimal "just a terminal in a tab" version, see [`examples/browser-terminal`](examples/browser-terminal/); for the protocol by hand, [`examples/raw-protocol-node`](examples/raw-protocol-node/).
+
+## Commands
+
+`runbaypty serve` is the daemon; every other verb is a client that talks to it over the socket. Every command takes `--help` (with examples), and `--json` where machine-readable output makes sense.
+
+**The daemon**
+
+| Command | What it does |
+|---|---|
+| `serve` | Run the daemon in the foreground (what a launchd/systemd unit points at). `--ws-port N` also enables the loopback WebSocket. |
+| `daemon install` | Copy the binary to a stable path and register the OS login service (launchd / systemd). |
+| `daemon start` / `daemon stop` | Start (or restart) / stop the installed service. |
+| `daemon status` | Report daemon liveness from the discovery file. |
+| `daemon uninstall` | Stop the service and remove the registration (sessions die). |
+
+**Spawn and interact with sessions**
+
+| Command | What it does |
+|---|---|
+| `run -- <cmd>` | Spawn a new PTY session. Flags: `--name`, `--log <path>` (durable history), `--ring <bytes>`, `--cwd`, `--json`. |
+| `attach <id\|name>` | Attach your terminal to a session. Detach with `ctrl-\`; `--read-only` to watch without typing. |
+| `kill <id\|name>` | Signal the session's whole process tree (`--signal TERM\|KILL\|INT\|HUP`). |
+| `resize <id\|name>` | Set the session's grid (cols/rows); last writer wins. |
+| `rename <id\|name>` | Change a session's name (empty string clears it). |
+| `meta <id\|name>` | Manage a session's client-owned key/value metadata. |
+
+**Inspect**
+
+| Command | What it does |
+|---|---|
+| `ls` | List sessions. |
+| `info <id\|name>` | Show one session's full detail (`--json`). |
+| `events` | Stream lifecycle events (created/exited/silence/activity/bell/command-\*). `--json`, `--session <id>`. |
+| `errors` | Inspect the stable error-code registry. |
+| `version` | Print version information. |
+
+**History and recording**
+
+| Command | What it does |
+|---|---|
+| `tail <id\|name>` | Print a session's full history (durable log + ring), then follow live. `--no-follow` prints and exits. |
+| `export <log-file>` | Convert a durable session log to an asciinema cast v2 (`--out`, `--title`). No daemon needed. |
+| `lastcmd <id\|name>` | Print the last completed command's output (needs OSC 133 shell integration). |
+
+Clients find the daemon via `RUNBAYPTY_SOCK` (socket path) and `RUNBAYPTY_HOME` (home dir, where the discovery file and WS tokens live); `--sock` overrides the socket per command. For copy-paste tours of these commands, see the [snippets playground](examples/snippets/).
 
 ## Highlights
 
