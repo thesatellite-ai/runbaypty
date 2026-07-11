@@ -46,11 +46,11 @@ const (
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   constants.BinaryName,
-		Short: "runbaypty — persistent, programmable PTY daemon",
+		Short: "runbaypty: persistent, programmable PTY daemon",
 		Long: `runbaypty owns PTY sessions so no app has to.
 
-A tiny OS-managed daemon holds your terminal sessions — dev servers, agents,
-shells — so they survive any client rebuild, crash, or quit. Clients connect
+A tiny OS-managed daemon holds your terminal sessions (dev servers, agents,
+shells) so they survive any client rebuild, crash, or quit. Clients connect
 over a Unix socket or WebSocket, stream bytes with zero-gap replay, detach,
 and reattach. Policy-free by design: no DB, no recipes, no restarts.`,
 		Version:       version,

@@ -70,7 +70,49 @@ For the minimal "just a terminal in a tab" version, see [`examples/browser-termi
 
 ## Commands
 
-`runbaypty serve` is the daemon; every other verb is a client that talks to it over the socket. Every command takes `--help` (with examples), and `--json` where machine-readable output makes sense.
+`runbaypty serve` is the daemon; every other verb is a client that talks to it over the socket. Every command takes `--help` (with examples), and `--json` where machine-readable output makes sense. Run `runbaypty` with no arguments to see the whole surface:
+
+```console
+$ runbaypty
+runbaypty owns PTY sessions so no app has to.
+
+A tiny OS-managed daemon holds your terminal sessions (dev servers, agents,
+shells) so they survive any client rebuild, crash, or quit. Clients connect
+over a Unix socket or WebSocket, stream bytes with zero-gap replay, detach,
+and reattach. Policy-free by design: no DB, no recipes, no restarts.
+
+Usage:
+  runbaypty [command]
+
+Available Commands:
+  attach      Attach your terminal to a session (detach: ctrl-\)
+  completion  Generate the autocompletion script for the specified shell
+  daemon      Install and control the OS-managed daemon (launchd / systemd)
+  errors      Inspect the stable error-code registry
+  events      Stream daemon lifecycle events (created/exited/silence/bell/…)
+  export      Convert a durable session log to an asciinema cast (v2)
+  help        Help about any command
+  info        Show one session's detail
+  kill        Signal a session's whole process tree
+  lastcmd     Print the last completed command's output (needs OSC 133 shell integration)
+  ls          List sessions
+  meta        Manage a session's client-owned metadata
+  rename      Rename a session (empty string clears the name)
+  resize      Resize a session's grid (last writer wins)
+  run         Spawn a new PTY session in the daemon
+  serve       Run the runbaypty daemon
+  skills      List the built-in agent skills (guides an agent reads, then acts on)
+  tail        Print a session's full history (durable log + ring), then follow live
+  version     Print version information
+
+Flags:
+      --color string   color output: auto | always | never (default "auto")
+  -h, --help           help for runbaypty
+      --sock string    daemon socket path (default: $RUNBAYPTY_SOCK or ~/.runbaypty/runbaypty.sock)
+  -v, --version        version for runbaypty
+
+Use "runbaypty [command] --help" for more information about a command.
+```
 
 **The daemon**
 
@@ -101,6 +143,7 @@ For the minimal "just a terminal in a tab" version, see [`examples/browser-termi
 | `info <id\|name>` | Show one session's full detail (`--json`). |
 | `events` | Stream lifecycle events (created/exited/silence/activity/bell/command-\*). `--json`, `--session <id>`. |
 | `errors` | Inspect the stable error-code registry. |
+| `skills` | List the built-in agent guides; `skills get <name>` prints one, `--json` for machine-readable. |
 | `version` | Print version information. |
 
 **History and recording**
@@ -176,7 +219,3 @@ macOS and Linux (v1). Windows ConPTY is a planned differentiator — the field r
 ## License
 
 [Apache-2.0](LICENSE) © 2026 [khanakia](https://github.com/khanakia) · thesatellite-ai
-
----
-
-<sub>persistent terminal sessions · PTY daemon · terminal multiplexer for programs · tmux alternative for AI agents · zero-downtime daemon upgrade · seq-numbered terminal replay · Go PTY SDK · WebSocket terminal · asciinema recording · OSC 133 shell integration · dtach abduco shpool ttyd alternative</sub>
