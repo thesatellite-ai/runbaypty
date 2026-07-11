@@ -76,6 +76,7 @@ and reattach. Policy-free by design: no DB, no recipes, no restarts.`,
 	root.AddCommand(newExportCommand())
 	root.AddCommand(newTailCommand())
 	root.AddCommand(newLastCmdCommand())
+	root.AddCommand(newSkillsCommand())
 	return root
 }
 
