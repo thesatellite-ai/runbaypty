@@ -3,8 +3,7 @@ name: Nightly
 # Nightly depth: the 10-minute soak (flat goroutine/heap curves under
 # session churn) plus a longer fuzz sweep than the per-PR smoke.
 on:
-  schedule:
-    - cron: "0 3 * * *" # 03:00 UTC daily
+  # Manual only for now (no scheduled runs): trigger from the Actions tab.
   workflow_dispatch:
 
 permissions:

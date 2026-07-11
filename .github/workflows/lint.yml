@@ -1,9 +1,8 @@
 name: lint
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Manual only for now: run from the Actions tab (or `gh workflow run lint.yml`).
+  workflow_dispatch:
 
 permissions:
   contents: read
