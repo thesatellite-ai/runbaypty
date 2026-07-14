@@ -201,6 +201,8 @@ func (c *conn) dispatch(f proto.Frame) bool {
 		c.onRename(f)
 	case proto.TypeSetMeta:
 		c.onSetMeta(f)
+	case proto.TypeSetMetaJSON:
+		c.onSetMetaJSON(f)
 	case proto.TypeTakeWrite:
 		c.onTakeWrite(f)
 	case proto.TypeReleaseWrite:
@@ -233,6 +235,7 @@ var controlOnlyTypes = map[proto.FrameType]bool{
 	proto.TypeKill:         true,
 	proto.TypeRename:       true,
 	proto.TypeSetMeta:      true,
+	proto.TypeSetMetaJSON:  true,
 	proto.TypeTakeWrite:    true,
 	proto.TypeReleaseWrite: true,
 }
@@ -313,18 +316,25 @@ func (c *conn) onSpawn(f proto.Frame) {
 	if m.Linger != nil {
 		linger = *m.Linger
 	}
+	// Validate the JSON meta blob up front so a bad object/reserved key/oversize
+	// fails the spawn loudly rather than being silently dropped at construction.
+	if err := host.ValidateSpawnAnnotations(m.Annotations); err != nil {
+		_ = c.sendErr(m.ReqID, err)
+		return
+	}
 	sess, err := c.srv.reg.Spawn(host.SpawnConfig{
-		Cmd:       m.Cmd,
-		Args:      m.Args,
-		Cwd:       m.Cwd,
-		Env:       m.Env,
-		Cols:      m.Cols,
-		Rows:      m.Rows,
-		Name:      m.Name,
-		Meta:      m.Meta,
-		RingBytes: ringBytes,
-		LogPath:   m.LogPath,
-		Linger:    linger,
+		Cmd:         m.Cmd,
+		Args:        m.Args,
+		Cwd:         m.Cwd,
+		Env:         m.Env,
+		Cols:        m.Cols,
+		Rows:        m.Rows,
+		Name:        m.Name,
+		Meta:        m.Meta,
+		Annotations: m.Annotations,
+		RingBytes:   ringBytes,
+		LogPath:     m.LogPath,
+		Linger:      linger,
 	})
 	if err != nil {
 		_ = c.sendErr(m.ReqID, err)
@@ -570,6 +580,28 @@ func (c *conn) onSetMeta(f proto.Frame) {
 		return
 	}
 	sess.SetMeta(m.Meta)
+	c.sendOK(m.ReqID)
+}
+
+// onSetMetaJSON merges or replaces a session's JSON meta document. The host
+// applies it atomically under the session lock (merge safety, size cap,
+// reserved rpty.* namespace, optional if_version CAS), returning typed errors
+// the client sees verbatim.
+func (c *conn) onSetMetaJSON(f proto.Frame) {
+	var m proto.SetMetaJSON
+	if err := f.DecodeHeader(&m); err != nil {
+		_ = c.sendErr("", err)
+		return
+	}
+	sess, err := c.srv.reg.Lookup(m.SessionID)
+	if err != nil {
+		_ = c.sendErr(m.ReqID, err)
+		return
+	}
+	if _, err := sess.SetMetaJSON(m.Mode, m.Patch, m.IfVersion); err != nil {
+		_ = c.sendErr(m.ReqID, err)
+		return
+	}
 	c.sendOK(m.ReqID)
 }
 

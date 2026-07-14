@@ -58,7 +58,7 @@ runbaypty ls                          # list all sessions
 runbaypty info build --json           # full detail: pid, state, bytes, seq, subscribers
 runbaypty rename build ci             # change the name (empty string clears it)
 runbaypty resize build                # set cols/rows (last writer wins)
-runbaypty meta build                  # get/set client-owned key/value metadata
+runbaypty meta merge build k=v a.b:=5 # merge JSON metadata (get/replace/unset too)
 runbaypty kill build --signal TERM    # signal the whole process tree (TERM|KILL|INT|HUP)
 ```
 

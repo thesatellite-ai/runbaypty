@@ -22,7 +22,7 @@ func TestFrameTypes_ReservedBlockAssignedButUnimplemented(t *testing.T) {
 	t.Parallel()
 	// The 40–49 block is reserved for the v1.5/v2 semantic layer. Assigned
 	// names must exist (so nothing else claims the values)…
-	for _, typ := range []FrameType{TypeCommandStarted, TypeCommandFinished} {
+	for _, typ := range []FrameType{TypeCommandStarted, TypeCommandFinished, TypeSetMetaJSON} {
 		if !typ.IsKnown() {
 			t.Errorf("reserved type %d must be registered", typ)
 		}
@@ -30,8 +30,9 @@ func TestFrameTypes_ReservedBlockAssignedButUnimplemented(t *testing.T) {
 			t.Errorf("reserved type %s = %d outside the 40–49 block", typ, typ)
 		}
 	}
-	// …and unassigned values in the block must stay unknown.
-	for v := FrameType(48); v <= 49; v++ {
+	// …and unassigned values in the block must stay unknown. 48 (SET_META_JSON)
+	// is now implemented; 49 remains the last free reserved slot.
+	for v := FrameType(49); v <= 49; v++ {
 		if v.IsKnown() {
 			t.Errorf("value %d in the reserved block is assigned prematurely", v)
 		}
@@ -46,11 +47,12 @@ func messageSamples() []any {
 	code := 3
 	exitedAt := int64(1700000000123)
 	linger := false
+	metaVer := uint64(3)
 	return []any{
 		&Hello{ReqID: "r", ProtocolVersion: 1, Token: "tokvalue", ClientName: "c"},
 		&HelloAck{ReqID: "r", ProtocolVersion: 1, DaemonVersion: "v", ClientID: "cli_x"},
 		&ErrorMsg{ReqID: "r", Code: "E_NOT_FOUND", Message: "m"},
-		&Spawn{ReqID: "r", Cmd: "c", Args: []string{"a"}, Cwd: "/", Env: []string{"K=V"}, Cols: 1, Rows: 2, Name: "n", Meta: map[string]string{"k": "v"}, RingBytes: 9, LogPath: "/l", Linger: &linger},
+		&Spawn{ReqID: "r", Cmd: "c", Args: []string{"a"}, Cwd: "/", Env: []string{"K=V"}, Cols: 1, Rows: 2, Name: "n", Meta: map[string]string{"k": "v"}, Annotations: json.RawMessage(`{"task":{"id":5}}`), RingBytes: 9, LogPath: "/l", Linger: &linger},
 		&SpawnOK{ReqID: "r", SessionID: "s", Pid: 1},
 		&InputHeader{ReqID: "r", SessionID: "s"},
 		&InputEOF{ReqID: "r", SessionID: "s"},
@@ -58,7 +60,7 @@ func messageSamples() []any {
 		&Resize{ReqID: "r", SessionID: "s", Cols: 1, Rows: 2},
 		&Kill{ReqID: "r", SessionID: "s", Signal: SignalINT},
 		&List{ReqID: "r"},
-		&ListOK{ReqID: "r", Sessions: []SessionInfo{{ID: "s", Name: "n", State: StateRunning, Pid: 1, Cmd: "c", Args: []string{"a"}, Cwd: "/", Cols: 1, Rows: 2, StartedAtMs: 5, ExitCode: &code, ExitedAtMs: &exitedAt, LastSeq: 6, BytesOut: 7, BytesIn: 8, Subscribers: 2, WriteLockHolder: "cli_x", Meta: map[string]string{"k": "v"}, LogPath: "/l", FgPid: 9, FgComm: "vim"}}},
+		&ListOK{ReqID: "r", Sessions: []SessionInfo{{ID: "s", Name: "n", State: StateRunning, Pid: 1, Cmd: "c", Args: []string{"a"}, Cwd: "/", Cols: 1, Rows: 2, StartedAtMs: 5, ExitCode: &code, ExitedAtMs: &exitedAt, LastSeq: 6, BytesOut: 7, BytesIn: 8, Subscribers: 2, WriteLockHolder: "cli_x", Meta: map[string]string{"k": "v"}, Annotations: json.RawMessage(`{"k":"v"}`), MetaVersion: metaVer, LogPath: "/l", FgPid: 9, FgComm: "vim"}}},
 		&Info{ReqID: "r", SessionID: "s"},
 		&InfoOK{ReqID: "r", Session: SessionInfo{ID: "s", State: StateExited}},
 		&Attach{ReqID: "r", SessionID: "s", SinceSeq: &seq, ReadOnly: true},
@@ -66,6 +68,7 @@ func messageSamples() []any {
 		&Detach{ReqID: "r", SessionID: "s"},
 		&Rename{ReqID: "r", SessionID: "s", Name: "n"},
 		&SetMeta{ReqID: "r", SessionID: "s", Meta: map[string]string{"k": "v"}},
+		&SetMetaJSON{ReqID: "r", SessionID: "s", Mode: MetaModeMerge, IfVersion: &metaVer, Patch: json.RawMessage(`{"a":"b"}`)},
 		&TakeWrite{ReqID: "r", SessionID: "s"},
 		&ReleaseWrite{ReqID: "r", SessionID: "s"},
 		&SubscribeEvents{ReqID: "r", SessionID: "s"},

@@ -25,6 +25,7 @@ import (
 	"github.com/thesatellite-ai/runbaypty/pkg/constants"
 	"github.com/thesatellite-ai/runbaypty/pkg/errcodes"
 	"github.com/thesatellite-ai/runbaypty/pkg/ids"
+	"github.com/thesatellite-ai/runbaypty/pkg/metajson"
 	"github.com/thesatellite-ai/runbaypty/pkg/proto"
 )
 
@@ -57,7 +58,12 @@ type SpawnConfig struct {
 	Cols uint16
 	Rows uint16
 	Name string
+	// Meta is the legacy flat KV; it seeds top-level string fields of the JSON
+	// meta document at spawn.
 	Meta map[string]string
+	// Annotations seeds the JSON meta document at spawn (arbitrary JSON object,
+	// pre-validated by the daemon); merges on top of Meta.
+	Annotations []byte
 	// RingBytes ≤ 0 uses constants.DefaultRingBytes.
 	RingBytes int
 	// LogPath enables the durable (ts,bytes) log at this path ("" = off).
@@ -86,16 +92,19 @@ type Session struct {
 	mu   sync.Mutex
 	cond *sync.Cond
 
-	cfg     SpawnConfig
-	name    string
-	meta    map[string]string
-	state   proto.SessionState
-	ptmx    *os.File
-	cmd     *exec.Cmd
-	pid     int
-	cols    uint16
-	rows    uint16
-	bytesIn uint64
+	cfg  SpawnConfig
+	name string
+	// metaDoc is the canonical JSON meta document (nil = empty); metaVersion
+	// bumps on every write. See meta.go for the write path and invariants.
+	metaDoc     []byte
+	metaVersion uint64
+	state       proto.SessionState
+	ptmx        *os.File
+	cmd         *exec.Cmd
+	pid         int
+	cols        uint16
+	rows        uint16
+	bytesIn     uint64
 
 	// writeLockHolder is the client id holding the single write lock
 	// ("" = unheld). Enforcement of readOnly attaches lives in the daemon;
@@ -180,7 +189,7 @@ func spawn(id string, cfg SpawnConfig, bus *EventBus) (*Session, error) {
 		mon:       NewMonitor(id, bus, cfg.SilenceAfter),
 		cfg:       cfg,
 		name:      cfg.Name,
-		meta:      cfg.Meta,
+		metaDoc:   initialMetaDoc(cfg),
 		state:     proto.StateRunning,
 		ptmx:      ptmx,
 		cmd:       cmd,
@@ -584,14 +593,6 @@ func (s *Session) Name() string {
 	return s.name
 }
 
-// SetMeta replaces the client-owned KV map wholesale (daemon never merges).
-func (s *Session) SetMeta(meta map[string]string) {
-	s.mu.Lock()
-	s.meta = meta
-	s.mu.Unlock()
-	s.bus.EmitSession(proto.EventMetaChanged, s.id, nil)
-}
-
 // Info snapshots the session for LIST_OK / INFO_OK.
 func (s *Session) Info() proto.SessionInfo {
 	s.mu.Lock()
@@ -626,7 +627,9 @@ func (s *Session) Info() proto.SessionInfo {
 		BytesIn:         s.bytesIn,
 		Subscribers:     int(s.subscribers.Load()),
 		WriteLockHolder: s.writeLockHolder,
-		Meta:            s.meta,
+		Meta:            metajson.Project(s.metaDoc),
+		Annotations:     annotationsForWire(s.metaDoc),
+		MetaVersion:     s.metaVersion,
 		LogPath:         s.cfg.LogPath,
 		FgPid:           fgPid,
 		FgComm:          fgComm,

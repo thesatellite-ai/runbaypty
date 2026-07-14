@@ -308,7 +308,7 @@ func TestConn_MalformedHeadersRejectedNotFatal(t *testing.T) {
 	bad := map[string]any{"req_id": 123, "session_id": 123} // numbers where strings are expected
 	for _, ft := range []proto.FrameType{
 		proto.TypeList, proto.TypeInfo, proto.TypeKill, proto.TypeResize,
-		proto.TypeRename, proto.TypeSetMeta, proto.TypeTakeWrite, proto.TypeReleaseWrite,
+		proto.TypeRename, proto.TypeSetMeta, proto.TypeSetMetaJSON, proto.TypeTakeWrite, proto.TypeReleaseWrite,
 		proto.TypeReplayCommand, proto.TypeSubEvents, proto.TypeAttach, proto.TypeDetach,
 		proto.TypeInputEOF, proto.TypeInput,
 	} {

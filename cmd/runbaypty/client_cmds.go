@@ -98,6 +98,7 @@ func newRunCommand() *cobra.Command {
 
 func newLsCommand() *cobra.Command {
 	var jsonOut bool
+	var filters []string
 	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List sessions",
@@ -110,6 +111,19 @@ func newLsCommand() *cobra.Command {
 			sessions, err := c.List(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if len(filters) > 0 {
+				kept := sessions[:0]
+				for _, s := range sessions {
+					ok, err := metaMatches(s.Annotations, filters)
+					if err != nil {
+						return err
+					}
+					if ok {
+						kept = append(kept, s)
+					}
+				}
+				sessions = kept
 			}
 			if jsonOut {
 				return printJSON(cmd, sessions)
@@ -134,6 +148,7 @@ func newLsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON")
+	cmd.Flags().StringArrayVar(&filters, "filter", nil, "keep sessions whose meta matches key=value (dotted keys ok; repeatable, AND)")
 	return cmd
 }
 
@@ -257,11 +272,95 @@ func newRenameCommand() *cobra.Command {
 func newMetaCommand() *cobra.Command {
 	meta := &cobra.Command{
 		Use:   "meta",
-		Short: "Manage a session's client-owned metadata",
+		Short: "Manage a session's JSON metadata document",
+		Long: `Attach arbitrary JSON to a session and update it safely.
+
+Value grammar (the operator decides the type, no guessing):
+  key=value     value is always a STRING   (name=deploy)
+  key:=value    value is parsed as JSON     (count:=5, tags:='["a","b"]')
+  a.b.c=value   dotted keys nest            ({"a":{"b":{"c":"value"}}})
+
+Real JSON without quoting hell: --json - (stdin) or --json @file.`,
 	}
+
+	get := &cobra.Command{
+		Use:   "get <id|name>",
+		Short: "Print the session's JSON meta document",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dial(cmd)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = c.Close() }()
+			info, err := c.Info(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			doc := info.Annotations
+			if len(doc) == 0 {
+				doc = json.RawMessage("{}")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(doc))
+			return nil
+		},
+	}
+
+	// merge and replace share a runner; only the wire mode differs.
+	writeCmd := func(use, short string, mode proto.MetaMode) *cobra.Command {
+		var jsonSrc string
+		var ifVersion int64
+		c := &cobra.Command{
+			Use:   use,
+			Short: short,
+			Args:  cobra.MinimumNArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				patch, err := buildMetaPatch(jsonSrc, args[1:], cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				return sendMetaJSON(cmd, args[0], patch, mode, ifVersion)
+			},
+		}
+		c.Flags().StringVar(&jsonSrc, "json", "", `JSON source: "-" stdin, "@file", or an inline literal`)
+		c.Flags().Int64Var(&ifVersion, "if-version", -1, "only apply if meta_version equals this (compare-and-swap)")
+		return c
+	}
+	merge := writeCmd("merge <id|name> [key=value | key:=json …]",
+		"Merge fields into the JSON meta document (RFC 7386; null deletes)", proto.MetaModeMerge)
+	replace := writeCmd("replace <id|name> [key=value | key:=json …]",
+		"Replace the whole JSON meta document", proto.MetaModeReplace)
+
+	unset := &cobra.Command{
+		Use:   "unset <id|name> <key> [key…]",
+		Short: "Delete keys from the JSON meta document (dotted paths ok)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			patch, err := buildUnsetPatch(args[1:])
+			if err != nil {
+				return err
+			}
+			return sendMetaJSON(cmd, args[0], patch, proto.MetaModeMerge, -1)
+		},
+	}
+
+	incr := &cobra.Command{
+		Use:   "incr <id|name> <key=delta> [key=delta…]",
+		Short: "Atomically add numeric deltas to meta fields (counters)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			patch, err := buildIncrPatch(args[1:])
+			if err != nil {
+				return err
+			}
+			return sendMetaJSON(cmd, args[0], patch, proto.MetaModeIncr, -1)
+		},
+	}
+
+	// set stays for back-compat: legacy flat wholesale replace (k=v strings).
 	set := &cobra.Command{
 		Use:   "set <id|name> k=v [k=v…]",
-		Short: "Replace the session's metadata wholesale",
+		Short: "Legacy: replace meta with flat string key/values",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kv, err := parseKVs(args[1:])
@@ -276,25 +375,25 @@ func newMetaCommand() *cobra.Command {
 			return c.SetMeta(cmd.Context(), args[0], kv)
 		},
 	}
-	get := &cobra.Command{
-		Use:   "get <id|name>",
-		Short: "Print the session's metadata as JSON",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(cmd)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = c.Close() }()
-			info, err := c.Info(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return printJSON(cmd, info.Meta)
-		},
-	}
-	meta.AddCommand(set, get)
+
+	meta.AddCommand(get, merge, replace, unset, incr, set)
 	return meta
+}
+
+// sendMetaJSON dials the daemon and applies a JSON meta patch. ifVersion < 0
+// means "no compare-and-swap"; >= 0 is sent as the CAS condition.
+func sendMetaJSON(cmd *cobra.Command, idOrName string, patch json.RawMessage, mode proto.MetaMode, ifVersion int64) error {
+	c, err := dial(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	opts := client.SetMetaOpts{Mode: mode}
+	if ifVersion >= 0 {
+		v := uint64(ifVersion)
+		opts.IfVersion = &v
+	}
+	return c.SetMetaJSON(cmd.Context(), idOrName, patch, opts)
 }
 
 func newEventsCommand() *cobra.Command {

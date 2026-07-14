@@ -63,6 +63,7 @@ const (
 	TypeReplayCommandOK FrameType = 45 // daemon → client: the window slice (payload) + boundaries
 	TypeHandoverReq     FrameType = 46 // new daemon → old daemon: begin takeover (UDS only)
 	TypeWatchOK         FrameType = 47 // daemon → client: watch registered, carries watch_id
+	TypeSetMetaJSON     FrameType = 48 // client → daemon: merge/replace the JSON meta document
 )
 
 // knownTypes maps every assigned frame type to its wire name (used by logs,
@@ -105,6 +106,7 @@ var knownTypes = map[FrameType]string{
 	TypeReplayCommandOK: "REPLAY_COMMAND_OK",
 	TypeHandoverReq:     "HANDOVER_REQ",
 	TypeWatchOK:         "WATCH_OK",
+	TypeSetMetaJSON:     "SET_META_JSON",
 }
 
 // String returns the wire name of the type, or "UNKNOWN(<n>)" for

@@ -11,20 +11,26 @@ import (
 	"time"
 
 	"github.com/thesatellite-ai/runbaypty/pkg/constants"
+	"github.com/thesatellite-ai/runbaypty/pkg/metajson"
 	"github.com/thesatellite-ai/runbaypty/pkg/proto"
 )
 
 // HandoverState is one session's transferable state. The ptmx fd rides
 // alongside via SCM_RIGHTS — fds cannot live in JSON.
 type HandoverState struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name,omitempty"`
-	Cmd         string            `json:"cmd"`
-	Args        []string          `json:"args,omitempty"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Cols        uint16            `json:"cols"`
-	Rows        uint16            `json:"rows"`
+	ID   string   `json:"id"`
+	Name string   `json:"name,omitempty"`
+	Cmd  string   `json:"cmd"`
+	Args []string `json:"args,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
+	Cols uint16   `json:"cols"`
+	Rows uint16   `json:"rows"`
+	// Meta is the legacy flat projection (top-level string fields), kept so a
+	// pre-upgrade daemon on the receiving end still restores tags. MetaDoc is
+	// the full JSON meta document; MetaVersion the write counter.
 	Meta        map[string]string `json:"meta,omitempty"`
+	MetaDoc     []byte            `json:"meta_doc,omitempty"`
+	MetaVersion uint64            `json:"meta_version,omitempty"`
 	Pid         int               `json:"pid"`
 	StartedAtMs int64             `json:"started_at_ms"`
 	RingCap     int               `json:"ring_cap"`
@@ -104,7 +110,9 @@ func (s *Session) HandoverState() (HandoverState, []byte, *os.File) {
 	ringData, endSeq := s.ring.Snapshot()
 	return HandoverState{
 		ID: s.id, Name: s.name, Cmd: s.cfg.Cmd, Args: s.cfg.Args, Cwd: s.cfg.Cwd,
-		Cols: s.cols, Rows: s.rows, Meta: s.meta, Pid: s.pid,
+		Cols: s.cols, Rows: s.rows,
+		Meta: metajson.Project(s.metaDoc), MetaDoc: s.metaDoc, MetaVersion: s.metaVersion,
+		Pid:         s.pid,
 		StartedAtMs: s.startedAt.UnixMilli(),
 		RingCap:     s.ring.capBytes(), RingEndSeq: endSeq,
 		BytesIn: s.bytesIn, LogPath: s.cfg.LogPath, Linger: s.cfg.Linger,
@@ -142,18 +150,19 @@ func AdoptSession(st HandoverState, ringData []byte, rawPtmx *os.File, bus *Even
 			Name: st.Name, Meta: st.Meta, RingBytes: st.RingCap,
 			LogPath: st.LogPath, Linger: st.Linger,
 		},
-		name:      st.Name,
-		meta:      st.Meta,
-		state:     proto.StateRunning,
-		ptmx:      ptmx,
-		cmd:       nil, // not our child — finish() takes the adopted path
-		pid:       st.Pid,
-		cols:      st.Cols,
-		rows:      st.Rows,
-		bytesIn:   st.BytesIn,
-		startedAt: time.UnixMilli(st.StartedAtMs).UTC(),
-		adopted:   true,
-		done:      make(chan struct{}),
+		name:        st.Name,
+		metaDoc:     adoptMetaDoc(st),
+		metaVersion: st.MetaVersion,
+		state:       proto.StateRunning,
+		ptmx:        ptmx,
+		cmd:         nil, // not our child — finish() takes the adopted path
+		pid:         st.Pid,
+		cols:        st.Cols,
+		rows:        st.Rows,
+		bytesIn:     st.BytesIn,
+		startedAt:   time.UnixMilli(st.StartedAtMs).UTC(),
+		adopted:     true,
+		done:        make(chan struct{}),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	s.readerDone = make(chan struct{})

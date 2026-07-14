@@ -60,6 +60,11 @@ const (
 	InvalidID    Code = "E_INVALID_ID"
 	InvalidInput Code = "E_INVALID_INPUT"
 
+	// ── Session meta (JSON document) ────────────────────────────────
+	MetaTooLarge    Code = "E_META_TOO_LARGE"    // merged meta doc exceeds the size cap
+	MetaConflict    Code = "E_META_CONFLICT"     // if-version CAS check failed (concurrent write)
+	ReservedMetaKey Code = "E_RESERVED_META_KEY" // client wrote a daemon-reserved rpty.* key
+
 	// ── Generic ─────────────────────────────────────────────────────
 	NotFound       Code = "E_NOT_FOUND"
 	Internal       Code = "E_INTERNAL"
@@ -77,6 +82,7 @@ func All() []Code {
 		LimitExceeded, SubscriberSlow,
 		DaemonUnreachable, DaemonStopping, LockHeld, VersionMismatch,
 		InvalidID, InvalidInput,
+		MetaTooLarge, MetaConflict, ReservedMetaKey,
 		NotFound, Internal, NotImplemented, Unsupported,
 	}
 }
@@ -114,6 +120,10 @@ func Description(c Code) string {
 
 		InvalidID:    "id failed format validation (expected <prefix>_<32-hex-uuidv7>)",
 		InvalidInput: "input value failed validation",
+
+		MetaTooLarge:    "merged meta document exceeds the maximum allowed size",
+		MetaConflict:    "meta if-version check failed; another writer updated it first",
+		ReservedMetaKey: "meta key uses the daemon-reserved rpty. namespace",
 
 		NotFound:       "requested entity does not exist",
 		Internal:       "internal error; please file a bug report",

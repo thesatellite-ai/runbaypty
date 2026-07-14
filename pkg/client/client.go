@@ -11,6 +11,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -260,10 +261,15 @@ type SpawnOpts struct {
 	Env        []string
 	Cols, Rows uint16
 	Name       string
-	Meta       map[string]string
-	RingBytes  int
-	LogPath    string
-	NoLinger   bool
+	// Meta is the legacy flat KV; it seeds top-level string fields of the JSON
+	// meta document. Prefer Annotations for structured data.
+	Meta map[string]string
+	// Annotations seeds the session's JSON meta document (arbitrary JSON
+	// object). Merge/replace after spawn with SetMetaJSON.
+	Annotations json.RawMessage
+	RingBytes   int
+	LogPath     string
+	NoLinger    bool
 }
 
 // Spawn starts a session and returns its id + pid.
@@ -279,7 +285,7 @@ func (c *Client) Spawn(ctx context.Context, o SpawnOpts) (sessionID string, pid 
 	resp, err := c.request(ctx, proto.TypeSpawn, func(reqID string) any {
 		return proto.Spawn{
 			ReqID: reqID, Cmd: o.Cmd, Args: o.Args, Cwd: o.Cwd, Env: o.Env,
-			Cols: o.Cols, Rows: o.Rows, Name: o.Name, Meta: o.Meta,
+			Cols: o.Cols, Rows: o.Rows, Name: o.Name, Meta: o.Meta, Annotations: o.Annotations,
 			RingBytes: o.RingBytes, LogPath: o.LogPath, Linger: linger,
 		}
 	}, nil, proto.TypeSpawnOK)
@@ -347,10 +353,35 @@ func (c *Client) Rename(ctx context.Context, idOrName, newName string) error {
 	return err
 }
 
-// SetMeta replaces the session's client-owned KV wholesale.
+// SetMeta replaces the session's legacy flat KV wholesale (folded into the
+// JSON meta document as top-level string fields). Prefer SetMetaJSON.
 func (c *Client) SetMeta(ctx context.Context, idOrName string, meta map[string]string) error {
 	_, err := c.request(ctx, proto.TypeSetMeta, func(reqID string) any {
 		return proto.SetMeta{ReqID: reqID, SessionID: idOrName, Meta: meta}
+	}, nil, proto.TypeOK)
+	return err
+}
+
+// SetMetaOpts tunes a SetMetaJSON call.
+type SetMetaOpts struct {
+	// Mode defaults to proto.MetaModeMerge (RFC 7386 merge patch); set
+	// proto.MetaModeReplace to swap the whole document.
+	Mode proto.MetaMode
+	// IfVersion, when non-nil, makes the write conditional (compare-and-swap):
+	// the daemon returns E_META_CONFLICT unless the current MetaVersion matches.
+	IfVersion *uint64
+}
+
+// SetMetaJSON merges (default) or replaces the session's JSON meta document.
+// The daemon applies it atomically under the session lock, so concurrent
+// patches to different fields never clobber each other. patch is a JSON merge
+// patch in merge mode, or the full document in replace mode.
+func (c *Client) SetMetaJSON(ctx context.Context, idOrName string, patch json.RawMessage, o SetMetaOpts) error {
+	_, err := c.request(ctx, proto.TypeSetMetaJSON, func(reqID string) any {
+		return proto.SetMetaJSON{
+			ReqID: reqID, SessionID: idOrName,
+			Mode: o.Mode, IfVersion: o.IfVersion, Patch: patch,
+		}
 	}, nil, proto.TypeOK)
 	return err
 }

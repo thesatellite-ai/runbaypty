@@ -27,6 +27,8 @@ var (
 	skillCore string
 	//go:embed skills/sessions.md
 	skillSessions string
+	//go:embed skills/meta.md
+	skillMeta string
 	//go:embed skills/history.md
 	skillHistory string
 	//go:embed skills/events.md
@@ -50,6 +52,7 @@ type skill struct {
 var skillRegistry = []skill{
 	{Name: "core", Desc: "Read first: the daemon model, env vars, and the spawn to attach to read loop", Body: skillCore},
 	{Name: "sessions", Desc: "Spawn, drive input, the single-writer lock, kill/rename/resize", Body: skillSessions},
+	{Name: "meta", Desc: "Attach JSON metadata: merge/replace/incr/unset, filter, CAS, the blackboard pattern", Body: skillMeta},
 	{Name: "history", Desc: "Durable --log, reprint with tail, replay with export (asciinema)", Body: skillHistory},
 	{Name: "events", Desc: "Wait-for-silence, wait-for-ready, OSC 133 command blocks, lastcmd", Body: skillEvents},
 	{Name: "remote", Desc: "WebSocket transport, scoped tokens, ssh -L to drive a remote daemon", Body: skillRemote},

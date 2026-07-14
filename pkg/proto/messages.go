@@ -8,7 +8,11 @@
 //     keystrokes); the daemon replies only on failure (ERROR with that ReqID).
 package proto
 
-import "github.com/thesatellite-ai/runbaypty/pkg/errcodes"
+import (
+	"encoding/json"
+
+	"github.com/thesatellite-ai/runbaypty/pkg/errcodes"
+)
 
 // ProtocolVersion is the wire-protocol major version this package speaks.
 // HELLO negotiation: major must match; unknown minor additions are ignored.
@@ -72,13 +76,18 @@ const (
 	DataKeyRows     = "rows"
 	// DataKeyLogBroken flags a disabled durable log on meta-changed events.
 	DataKeyLogBroken = "log_broken"
+	// DataKeyMetaKeys / DataKeyMetaVersion ride meta-changed events: the
+	// comma-joined top-level keys the write touched, and the new version. Let a
+	// subscriber react (blackboard pattern) without a follow-up INFO round-trip.
+	DataKeyMetaKeys    = "meta_keys"
+	DataKeyMetaVersion = "meta_version"
 )
 
 // DataKeyValues is the canonical iteration order (doc-drift + tests).
 var DataKeyValues = []string{
 	DataKeyExitCode, DataKeySignal, DataKeyQuietMs, DataKeyStartSeq,
 	DataKeyEndSeq, DataKeyClient, DataKeyName, DataKeyCmd, DataKeyCols,
-	DataKeyRows, DataKeyLogBroken,
+	DataKeyRows, DataKeyLogBroken, DataKeyMetaKeys, DataKeyMetaVersion,
 }
 
 // EventTypeValues is the canonical iteration order.
@@ -140,8 +149,14 @@ type Spawn struct {
 	Rows  uint16   `json:"rows"`
 	// Name is the optional unique human name (tmux-style attach target).
 	Name string `json:"name,omitempty"`
-	// Meta is client-owned KV; the daemon stores it verbatim, never reads it.
+	// Meta is the legacy flat client-owned KV. It still works: the daemon folds
+	// each pair into the JSON meta document as a top-level string field. Prefer
+	// Annotations for anything structured. See docsi/META_SPEC.md.
 	Meta map[string]string `json:"meta,omitempty"`
+	// Annotations seeds the session's JSON meta document at spawn (arbitrary
+	// JSON object). "annotations" is the wire name for what the CLI/SDK call
+	// `meta`. Merge/replace after spawn via SET_META_JSON.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 	// RingBytes overrides the per-session ring cap (0 = daemon default).
 	RingBytes int `json:"ring_bytes,omitempty"`
 	// LogPath enables the durable (ts,bytes) log at the given path ("" = off).
@@ -240,9 +255,16 @@ type SessionInfo struct {
 	BytesIn  uint64 `json:"bytes_in"`
 	// Subscribers counts active attaches; WriteLockHolder is the cli_… id
 	// holding the write lock ("" = unheld).
-	Subscribers     int               `json:"subscribers"`
-	WriteLockHolder string            `json:"write_lock_holder,omitempty"`
-	Meta            map[string]string `json:"meta,omitempty"`
+	Subscribers     int    `json:"subscribers"`
+	WriteLockHolder string `json:"write_lock_holder,omitempty"`
+	// Meta is the legacy flat projection: the top-level string fields of the
+	// JSON meta document, so pre-upgrade clients still see their tags.
+	Meta map[string]string `json:"meta,omitempty"`
+	// Annotations is the full JSON meta document (the CLI/SDK `meta`).
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	// MetaVersion increments on every meta write; used for optimistic
+	// concurrency (SET_META_JSON if_version). 0 means never written.
+	MetaVersion uint64 `json:"meta_version,omitempty"`
 	// LogPath is the durable log location ("" = logging off). Lets clients
 	// stitch full history (log) with the live stream (ring seq axis): read
 	// the log's N bytes, then ATTACH {since_seq: N} — same byte axis.
@@ -289,12 +311,45 @@ type Rename struct {
 	Name      string `json:"name"`
 }
 
-// SetMeta replaces the client-owned KV metadata wholesale (read-modify-write
-// is the client's job; the daemon never merges).
+// SetMeta replaces the legacy flat KV metadata wholesale. Retained for
+// back-compat: the daemon converts the map into a wholesale replace of the
+// JSON meta document. New clients use SET_META_JSON instead.
 type SetMeta struct {
 	ReqID     string            `json:"req_id"`
 	SessionID string            `json:"session_id"`
 	Meta      map[string]string `json:"meta"`
+}
+
+// MetaMode is the closed set of write modes for the JSON meta document.
+type MetaMode string
+
+const (
+	// MetaModeMerge applies an RFC 7386 JSON Merge Patch (the default): only
+	// the fields present in the patch change; null deletes a key.
+	MetaModeMerge MetaMode = "merge"
+	// MetaModeReplace swaps the whole document for the patch.
+	MetaModeReplace MetaMode = "replace"
+	// MetaModeIncr adds the patch's numeric leaves to the matching fields
+	// (atomic counters that a merge cannot express). Missing fields count as 0.
+	MetaModeIncr MetaMode = "incr"
+)
+
+// MetaModeValues is the canonical iteration order.
+var MetaModeValues = []MetaMode{MetaModeMerge, MetaModeReplace, MetaModeIncr}
+
+// SetMetaJSON merges or replaces a session's JSON meta document. The daemon
+// applies it atomically under the session lock, so concurrent patches to
+// different fields never clobber each other (see docsi/META_SPEC.md).
+type SetMetaJSON struct {
+	ReqID     string `json:"req_id"`
+	SessionID string `json:"session_id"`
+	// Mode defaults to MetaModeMerge when empty.
+	Mode MetaMode `json:"mode,omitempty"`
+	// IfVersion, when set, makes the write conditional: the daemon rejects it
+	// with E_META_CONFLICT unless the current MetaVersion equals *IfVersion.
+	IfVersion *uint64 `json:"if_version,omitempty"`
+	// Patch is the JSON merge patch (merge mode) or the full document (replace).
+	Patch json.RawMessage `json:"patch"`
 }
 
 // TakeWrite claims the single write lock (steals from the current holder —

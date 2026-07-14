@@ -96,7 +96,7 @@ Available Commands:
   kill        Signal a session's whole process tree
   lastcmd     Print the last completed command's output (needs OSC 133 shell integration)
   ls          List sessions
-  meta        Manage a session's client-owned metadata
+  meta        Manage a session's JSON metadata document
   rename      Rename a session (empty string clears the name)
   resize      Resize a session's grid (last writer wins)
   run         Spawn a new PTY session in the daemon
@@ -133,13 +133,13 @@ Use "runbaypty [command] --help" for more information about a command.
 | `kill <id\|name>` | Signal the session's whole process tree (`--signal TERM\|KILL\|INT\|HUP`). |
 | `resize <id\|name>` | Set the session's grid (cols/rows); last writer wins. |
 | `rename <id\|name>` | Change a session's name (empty string clears it). |
-| `meta <id\|name>` | Manage a session's client-owned key/value metadata. |
+| `meta <id\|name>` | Manage a session's JSON metadata: `get` / `merge` / `replace` / `unset` / `incr` (`k=v` string, `k:=v` JSON, dotted keys, `--json`, `--if-version`). |
 
 **Inspect**
 
 | Command | What it does |
 |---|---|
-| `ls` | List sessions. |
+| `ls` | List sessions (`--filter key=val` keeps those whose meta matches; repeatable = AND). |
 | `info <id\|name>` | Show one session's full detail (`--json`). |
 | `events` | Stream lifecycle events (created/exited/silence/activity/bell/command-\*). `--json`, `--session <id>`. |
 | `errors` | Inspect the stable error-code registry. |
